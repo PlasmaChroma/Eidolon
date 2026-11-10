@@ -216,8 +216,13 @@ struct FM1Host : Module {
 };
 
 namespace {
-const NVGcolor CYAN = nvgRGB(92, 224, 207);
-const NVGcolor INK = nvgRGB(181, 205, 216);
+// Palette: dark graphite device body with light silkscreen.
+const NVGcolor BODY = nvgRGB(52, 53, 56);
+const NVGcolor BEZEL = nvgRGB(36, 37, 40);
+const NVGcolor CAP = nvgRGB(30, 31, 33);
+const NVGcolor INK = nvgRGB(214, 216, 220);
+const NVGcolor DIM = nvgRGB(140, 143, 148);
+const NVGcolor LIT = nvgRGB(255, 244, 214);
 
 void text(NVGcontext* vg, float x, float y, float size, const std::string& value, NVGcolor color = INK, int align = NVG_ALIGN_CENTER) {
     nvgFontFaceId(vg, APP->window->uiFont->handle);
@@ -228,37 +233,44 @@ void rounded(NVGcontext* vg, Rect box, float radius, NVGcolor color) {
     nvgBeginPath(vg); nvgRoundedRect(vg, box.pos.x, box.pos.y, box.size.x, box.size.y, radius);
     nvgFillColor(vg, color); nvgFill(vg);
 }
+// Soft raised cap: base fill, subtle top highlight, dark outline.
+void cap(NVGcontext* vg, Rect r, float radius, NVGcolor color) {
+    nvgBeginPath(vg); nvgRoundedRect(vg, r.pos.x, r.pos.y + 1.5f, r.size.x, r.size.y, radius);
+    nvgFillColor(vg, nvgRGBA(0, 0, 0, 110)); nvgFill(vg);
+    nvgBeginPath(vg); nvgRoundedRect(vg, r.pos.x, r.pos.y, r.size.x, r.size.y, radius);
+    nvgFillPaint(vg, nvgLinearGradient(vg, 0, r.pos.y, 0, r.pos.y + r.size.y, nvgLerpRGBA(color, nvgRGB(255, 255, 255), .08f), color));
+    nvgFill(vg);
+    nvgStrokeColor(vg, nvgRGBA(0, 0, 0, 160)); nvgStrokeWidth(vg, 1); nvgStroke(vg);
+}
 
-struct HostPort : app::PortWidget {
-    HostPort() { box.size = Vec(26, 26); }
-    void draw(const DrawArgs& args) override {
-        nvgBeginPath(args.vg); nvgCircle(args.vg, 13, 13, 12);
-        nvgFillColor(args.vg, nvgRGB(44, 64, 78)); nvgFill(args.vg);
-        nvgStrokeWidth(args.vg, 1.5); nvgStrokeColor(args.vg, type == engine::Port::OUTPUT ? CYAN : INK); nvgStroke(args.vg);
-        nvgBeginPath(args.vg); nvgCircle(args.vg, 13, 13, 7);
-        nvgFillColor(args.vg, nvgRGB(6, 12, 18)); nvgFill(args.vg);
-        app::PortWidget::draw(args);
+// Stock Rack knob artwork used as a display-only endless encoder.
+struct EncoderView : widget::FramebufferWidget {
+    widget::TransformWidget* tw;
+    widget::SvgWidget* sw;
+    float angle = 0;
+    EncoderView() {
+        auto* bg = new widget::SvgWidget;
+        bg->setSvg(Svg::load(asset::system("res/ComponentLibrary/RoundSmallBlackKnob_bg.svg")));
+        addChild(bg);
+        tw = new widget::TransformWidget; addChild(tw);
+        sw = new widget::SvgWidget;
+        sw->setSvg(Svg::load(asset::system("res/ComponentLibrary/RoundSmallBlackKnob.svg")));
+        tw->addChild(sw);
+        box.size = tw->box.size = bg->box.size = sw->box.size;
+        rotate(0);
+    }
+    void rotate(float delta) {
+        angle += delta;
+        Vec c = sw->box.getCenter();
+        tw->identity(); tw->translate(c); tw->rotate(angle); tw->translate(c.neg());
+        setDirty();
     }
 };
 
-struct HostKnob : app::Knob {
-    HostKnob() { box.size = Vec(28, 28); minAngle = -2.5f; maxAngle = 2.5f; }
-    void draw(const DrawArgs& args) override {
-        nvgBeginPath(args.vg); nvgCircle(args.vg, 14, 14, 12);
-        nvgFillColor(args.vg, nvgRGB(42, 64, 77)); nvgFill(args.vg);
-        nvgStrokeColor(args.vg, CYAN); nvgStrokeWidth(args.vg, 1); nvgStroke(args.vg);
-        float value = getParamQuantity() ? getParamQuantity()->getScaledValue() : .8f;
-        float angle = -2.5f + 5.f * value;
-        nvgBeginPath(args.vg); nvgMoveTo(args.vg, 14 + std::sin(angle) * 5, 14 - std::cos(angle) * 5);
-        nvgLineTo(args.vg, 14 + std::sin(angle) * 10, 14 - std::cos(angle) * 10);
-        nvgStrokeColor(args.vg, CYAN); nvgStrokeWidth(args.vg, 2); nvgStroke(args.vg);
-        app::Knob::draw(args);
-    }
-};
-
-// Original compact host layout, not a reproduction of the product's panel.
+// Panel follows the hardware's control arrangement (no logos or trademarks).
 // All firmware controls are matrix events; right-click latches a key/button so
 // firmware button combinations remain possible with a single mouse pointer.
+// Geometry is in panel pixels; the device face occupies x 0..640, jacks x 640..690.
 struct HostPanel : Widget {
     FM1Host* module = nullptr;
     Fm1Status status{};
@@ -272,22 +284,64 @@ struct HostPanel : Widget {
     unsigned ticks = 0;
     int heldKey = -1, dragEncoder = -1;
     float dragAccum = 0;
+    // Encoder index -> firmware encoder id, label, and centre.
     const std::array<int, 7> encoderIds{{0, 6, 1, 2, 3, 4, 5}};
-    const std::array<const char*, 7> encoderLabels{{"SELECT", "PRESET", "ALGO", "K1", "K2", "K3", "K4"}};
-    const std::array<Vec, 7> encoderPos{{Vec(244, 70), Vec(326, 70), Vec(408, 70), Vec(230, 128), Vec(291, 128), Vec(352, 128), Vec(413, 128)}};
-    const std::array<const char*, 14> buttonLabels{{"OCT-", "OCT+", "FX", "SCL", "ENV", "LFO", "EDIT", "GLO", "HOME", "SAVE", "ARP", "SEQ", "PLAY", "REC"}};
-    HostPanel() { box.size = Vec(480, 380); status.abi_version = FM1_ABI_VERSION; }
+    const std::array<const char*, 7> encoderLabels{{"SELECT", "PRESETS", "ALGORITHM", "KNOB1", "KNOB2", "KNOB3", "KNOB4"}};
+    const std::array<Vec, 7> encoderPos{{Vec(82, 62), Vec(32, 126), Vec(82, 126), Vec(404, 62), Vec(471, 62), Vec(538, 62), Vec(605, 62)}};
+    std::array<EncoderView*, 7> encoderViews{};
+    const std::array<const char*, 14> buttonLabels{{"OCT-", "OCT+", "FX", "SEL", "ENV", "LFO", "EDIT", "GLO", "HOME", "SAVE", "ARP", "SEQ", "PLAY", "REC"}};
+    // Key contacts 14..40 are chromatic from F: sharps on the top row, naturals below.
+    std::array<Rect, 27> keyRects{};
+    std::array<bool, 27> keyIsSharp{};
+    std::array<const char*, 27> keyLabels{};
+    static constexpr float SCREEN_X = 122, SCREEN_Y = 14, SCREEN_SIZE = 236;
+    static constexpr float STATUS_X = 375 + 257 / 2.f;  // centred under the button block
+
+    HostPanel() {
+        box.size = Vec(690, 380);
+        status.abi_version = FM1_ABI_VERSION;
+        static const bool sharp[12] = {false, true, false, true, false, true, false, false, true, false, true, false};
+        static const char* topLabels[11] = {"OP1", "OP2", "OP3", "OP4", "OP5", "OP6", "PIT", "GLO", "MONO", "POLY", ""};
+        const float whiteX0 = 50, whiteStep = 36.2f;
+        int white = 0, black = 0;
+        for (int s = 0; s < 27; ++s) {
+            keyIsSharp[s] = sharp[s % 12];
+            if (keyIsSharp[s]) {
+                float x = whiteX0 + (white - .5f) * whiteStep;
+                keyRects[s] = Rect(Vec(x - 14, 267), Vec(28, 42));
+                keyLabels[s] = topLabels[black++];
+            } else {
+                float x = whiteX0 + white++ * whiteStep;
+                keyRects[s] = Rect(Vec(x - 15, 314), Vec(30, 48));
+                keyLabels[s] = "";
+            }
+        }
+        for (int i = 0; i < 7; ++i) {
+            auto* view = new EncoderView;
+            view->box.pos = encoderPos[i].minus(view->box.size.div(2));
+            addChild(view);
+            encoderViews[i] = view;
+        }
+    }
     ~HostPanel() override { if (image >= 0 && imageContext) nvgDeleteImage(imageContext, image); }
-    Rect buttonRect(int id) const { return Rect(Vec(214 + (id % 7) * 36, 175 + (id / 7) * 32), Vec(32, 23)); }
-    Rect keyRect(int id) const { return Rect(Vec(18 + (id - 14) * 16.5f, 275), Vec(15, 24)); }
+    Rect buttonRect(int id) const {
+        if (id < 2) return Rect(Vec(14 + id * 46, 168), Vec(40, 23));
+        int i = id - 2;
+        return Rect(Vec(386 + (i % 6) * 40.3f, 113 + (i / 6) * 40), Vec(35, 32));
+    }
+    Rect keyRect(int id) const { return keyRects[id - 14]; }
     int keyAt(Vec p) const {
         for (int i = 0; i < 14; ++i) if (buttonRect(i).contains(p)) return i;
         for (int i = 14; i < 41; ++i) if (keyRect(i).contains(p)) return i;
         return -1;
     }
     int encoderAt(Vec p) const {
-        for (int i = 0; i < 7; ++i) if (p.minus(encoderPos[i]).norm() <= 19.f) return i;
+        for (int i = 0; i < 7; ++i) if (p.minus(encoderPos[i]).norm() <= 16.f) return i;
         return -1;
+    }
+    void turn(int enc, int steps) {
+        fm1_encoder(module->runtime, encoderIds[enc], steps);
+        encoderViews[enc]->rotate(steps * float(M_PI) / 12.f);
     }
     void key(int id, bool down) {
         wantedKey[id] = down;
@@ -315,58 +369,89 @@ struct HostPanel : Widget {
             imageDirty = true;
         }
     }
+    void drawScreen(NVGcontext* vg) {
+        rounded(vg, Rect(Vec(SCREEN_X - 7, SCREEN_Y - 7), Vec(SCREEN_SIZE + 14, SCREEN_SIZE + 14)), 14, nvgRGB(8, 8, 9));
+        rounded(vg, Rect(Vec(SCREEN_X - 1, SCREEN_Y - 1), Vec(SCREEN_SIZE + 2, SCREEN_SIZE + 2)), 2, nvgRGB(0, 0, 0));
+        if (image >= 0 && imageContext != vg) { nvgDeleteImage(imageContext, image); image = -1; }
+        if (image < 0) { image = nvgCreateImageRGBA(vg, 240, 240, 0, rgba.data()); imageContext = vg; imageDirty = false; }
+        if (image >= 0 && imageDirty) { nvgUpdateImage(vg, image, rgba.data()); imageDirty = false; }
+        const float cx = SCREEN_X + SCREEN_SIZE / 2;
+        if (image >= 0 && status.state == FM1_STATUS_RUNNING) {
+            nvgBeginPath(vg); nvgRect(vg, SCREEN_X, SCREEN_Y, SCREEN_SIZE, SCREEN_SIZE);
+            nvgFillPaint(vg, nvgImagePattern(vg, SCREEN_X, SCREEN_Y, SCREEN_SIZE, SCREEN_SIZE, 0, image, 1)); nvgFill(vg);
+        } else {
+            text(vg, cx, SCREEN_Y + 85, 12, status.state == FM1_STATUS_LOADING ? "BOOTING" : "NO FIRMWARE");
+            text(vg, cx, SCREEN_Y + 107, 8, "Right-click: Import firmware", DIM);
+            text(vg, cx, SCREEN_Y + 120, 8, "or drop a .fwsc file here", DIM);
+            text(vg, cx, SCREEN_Y + 145, 7, "No firmware is included.", DIM);
+        }
+        const char* state = status.state == FM1_STATUS_RUNNING ? "RUNNING" : status.state == FM1_STATUS_LOADING ? "LOADING" : status.state == FM1_STATUS_HALTED ? "HALTED" : status.state == FM1_STATUS_ERROR ? "ERROR" : "EMPTY";
+        std::string line = state;
+        if (status.state == FM1_STATUS_RUNNING)
+            line += string::f("  %.1fx  %u MHz", status.realtime_speed, status.clock_mhz);
+        text(vg, STATUS_X, 212, 7, line, DIM);
+        std::string message(status.message);
+        if (message.size() > 44) message = message.substr(0, 43) + "...";
+        text(vg, STATUS_X, 224, 6.5f, message, DIM);
+    }
     void draw(const DrawArgs& args) override {
         auto* vg = args.vg;
-        rounded(vg, Rect(Vec(), box.size), 0, nvgRGB(17, 29, 40));
-        text(vg, 20, 20, 16, "FIRMWARE HOST", CYAN, NVG_ALIGN_LEFT);
-        text(vg, 460, 20, 8, "FM-1 RUNTIME / USER-SUPPLIED IMAGES", INK, NVG_ALIGN_RIGHT);
-        rounded(vg, Rect(Vec(14, 39), Vec(190, 190)), 5, nvgRGB(4, 10, 15));
-        if (image >= 0 && imageContext != vg) { nvgDeleteImage(imageContext, image); image = -1; }
-        if (image < 0) { image = nvgCreateImageRGBA(vg, 240, 240, NVG_IMAGE_NEAREST, rgba.data()); imageContext = vg; imageDirty = false; }
-        if (image >= 0 && imageDirty) { nvgUpdateImage(vg, image, rgba.data()); imageDirty = false; }
-        if (image >= 0 && status.state == FM1_STATUS_RUNNING) {
-            nvgBeginPath(vg); nvgRect(vg, 17, 42, 184, 184);
-            nvgFillPaint(vg, nvgImagePattern(vg, 17, 42, 184, 184, 0, image, 1)); nvgFill(vg);
-        } else {
-            text(vg, 109, 109, 13, status.state == FM1_STATUS_LOADING ? "BOOTING" : "NO FIRMWARE", CYAN);
-            text(vg, 109, 133, 9, "Right-click: Import firmware");
-            text(vg, 109, 150, 9, "or drop a .fwsc file here");
-            text(vg, 109, 182, 8, "No firmware is included.");
-        }
-        for (int i = 0; i < 7; ++i) {
-            nvgBeginPath(vg); nvgCircle(vg, encoderPos[i].x, encoderPos[i].y, 17);
-            nvgFillColor(vg, nvgRGB(36, 59, 73)); nvgFill(vg);
-            nvgStrokeColor(vg, CYAN); nvgStrokeWidth(vg, 1); nvgStroke(vg);
-            text(vg, encoderPos[i].x, encoderPos[i].y, 12, "+/-", CYAN);
-            text(vg, encoderPos[i].x, encoderPos[i].y + 27, 9, encoderLabels[i]);
-        }
+        // Module background, then the device body.
+        rounded(vg, Rect(Vec(), box.size), 0, BEZEL);
+        rounded(vg, Rect(Vec(4, 6), Vec(632, 368)), 22, BODY);
+        drawScreen(vg);
+
+        text(vg, 32, 30, 8.5f, "MASTER");
+        for (int i = 0; i < 7; ++i)
+            text(vg, encoderPos[i].x, encoderPos[i].y - 31, 8.5f, encoderLabels[i]);
+
+        // Octave buttons and the 12-button function block sit in recessed wells.
+        rounded(vg, Rect(Vec(9, 162), Vec(96, 35)), 6, BEZEL);
+        rounded(vg, Rect(Vec(375, 104), Vec(257, 90)), 9, BEZEL);
         for (int i = 0; i < 14; ++i) {
             Rect r = buttonRect(i);
             bool active = latch[i] || heldKey == i;
-            float glow = std::max(active ? .7f : 0.f, status.leds[i]);
-            rounded(vg, r, 4, nvgLerpRGBA(nvgRGB(35, 54, 67), CYAN, std::min(1.f, glow)));
-            text(vg, r.pos.x + 16, r.pos.y + 12, 8, buttonLabels[i], active ? nvgRGB(7, 26, 32) : INK);
+            float glow = std::min(1.f, std::max(active ? .8f : 0.f, status.leds[i]));
+            cap(vg, r, 5, nvgLerpRGBA(CAP, nvgRGB(70, 72, 76), glow));
+            NVGcolor label = nvgLerpRGBA(INK, LIT, glow);
+            if (i == 12) {  // Two-line label like the hardware's PLAY/STOP.
+                text(vg, r.getCenter().x, r.getCenter().y - 5, 7.5f, "PLAY", label);
+                nvgBeginPath(vg); nvgMoveTo(vg, r.getCenter().x - 10, r.getCenter().y); nvgLineTo(vg, r.getCenter().x + 10, r.getCenter().y);
+                nvgStrokeColor(vg, label); nvgStrokeWidth(vg, .7f); nvgStroke(vg);
+                text(vg, r.getCenter().x, r.getCenter().y + 5.5f, 7.5f, "STOP", label);
+            } else {
+                text(vg, r.getCenter().x, r.getCenter().y, 7.5f, buttonLabels[i], label);
+            }
         }
-        const char* state = status.state == FM1_STATUS_RUNNING ? "RUNNING" : status.state == FM1_STATUS_LOADING ? "LOADING" : status.state == FM1_STATUS_HALTED ? "HALTED" : status.state == FM1_STATUS_ERROR ? "ERROR" : "EMPTY";
-        text(vg, 18, 242, 9, state, CYAN, NVG_ALIGN_LEFT);
-        if (status.state == FM1_STATUS_RUNNING)
-            text(vg, 76, 242, 9, string::f("%.1fx  |  %u MHz  |  lead %.1f ms", status.realtime_speed, status.clock_mhz, status.lead_frames / 44.1), INK, NVG_ALIGN_LEFT);
-        text(vg, 18, 257, 8, std::string(status.message).substr(0, 68), INK, NVG_ALIGN_LEFT);
-        text(vg, 438, 270, 8, "MASTER");
-        const char* notes[12] = {"F", "F#", "G", "G#", "A", "A#", "B", "C", "C#", "D", "D#", "E"};
+
+        // Key bed.
+        rounded(vg, Rect(Vec(21, 258), Vec(598, 112)), 16, nvgRGB(24, 25, 27));
         for (int id = 14; id < 41; ++id) {
             Rect r = keyRect(id);
-            const char* label = notes[(id - 14) % 12];
-            bool black = std::strlen(label) == 2;
             bool active = latch[id] || heldKey == id;
-            rounded(vg, r, 3, active ? CYAN : black ? nvgRGB(26, 45, 59) : nvgRGB(69, 87, 99));
-            text(vg, r.pos.x + 7.5, r.pos.y + 12, 7, label, active ? nvgRGB(5, 25, 29) : INK);
+            float glow = std::min(1.f, std::max(active ? 1.f : 0.f, status.leds[id]));
+            cap(vg, r, r.size.x / 2, CAP);
+            const bool sharp = keyIsSharp[id - 14];
+            const float barTop = r.pos.y + 8, barHeight = sharp ? 13 : 30;
+            rounded(vg, Rect(Vec(r.getCenter().x - 1.6f, barTop), Vec(3.2f, barHeight)), 1.6f,
+                    nvgLerpRGBA(nvgRGB(205, 207, 210), LIT, glow));
+            if (glow > 0) {
+                nvgBeginPath(vg); nvgRoundedRect(vg, r.getCenter().x - 4, barTop - 2, 8, barHeight + 4, 4);
+                nvgFillColor(vg, nvgRGBAf(1, .9f, .7f, .25f * glow)); nvgFill(vg);
+            }
+            if (sharp && keyLabels[id - 14][0])
+                text(vg, r.getCenter().x, r.pos.y + r.size.y - 11, 6.5f, keyLabels[id - 14]);
         }
-        const char* labels[9] = {"V/OCT", "GATE", "VEL", "CC", "CLK24", "RUN", "RESET", "L", "R"};
-        for (int i = 0; i < 9; ++i) text(vg, 28 + i * 53, 316, 9, labels[i], i >= 7 ? CYAN : INK);
-        text(vg, 18, 366, 8, "LOCAL FIRMWARE + FLASH  /  PATCHES CONTAIN REFERENCES ONLY", INK, NVG_ALIGN_LEFT);
-        text(vg, 461, 366, 8, "MIT CORE", CYAN, NVG_ALIGN_RIGHT);
+
+        // Jack column.
+        static const char* labels[9] = {"V/OCT", "GATE", "VEL", "CC", "CLK", "RUN", "RESET", "L", "R"};
+        rounded(vg, Rect(Vec(645, 274), Vec(40, 84)), 5, nvgRGB(24, 25, 27));
+        for (int i = 0; i < 9; ++i)
+            text(vg, jackPos(i).x, jackPos(i).y - 17, 7, labels[i], i >= 7 ? INK : DIM);
         Widget::draw(args);
+    }
+    static Vec jackPos(int i) {
+        return Vec(665, 30 + i * 39);
     }
     void onButton(const event::Button& e) override {
         int id = keyAt(e.pos);
@@ -389,14 +474,14 @@ struct HostPanel : Widget {
         if (dragEncoder >= 0 && module && module->runtime) {
             dragAccum -= e.mouseDelta.y / 5.f;
             int steps = static_cast<int>(dragAccum);
-            if (steps) { fm1_encoder(module->runtime, encoderIds[dragEncoder], steps); dragAccum -= steps; }
+            if (steps) { turn(dragEncoder, steps); dragAccum -= steps; }
         }
         Widget::onDragMove(e);
     }
     void onHoverScroll(const event::HoverScroll& e) override {
         int enc = encoderAt(e.pos);
         if (enc >= 0 && module && module->runtime && e.scrollDelta.y != 0) {
-            fm1_encoder(module->runtime, encoderIds[enc], e.scrollDelta.y > 0 ? 1 : -1);
+            turn(enc, e.scrollDelta.y > 0 ? 1 : -1);
             e.consume(this); return;
         }
         Widget::onHoverScroll(e);
@@ -415,14 +500,14 @@ struct HostPanel : Widget {
 struct FM1HostWidget : ModuleWidget {
     FM1HostWidget(FM1Host* module) {
         setModule(module);
-        box.size = Vec(32 * RACK_GRID_WIDTH, RACK_GRID_HEIGHT);
+        box.size = Vec(46 * RACK_GRID_WIDTH, RACK_GRID_HEIGHT);
         HostPanel* panel = new HostPanel;
         panel->module = module; addChild(panel);
         for (int i = 0; i < FM1Host::NUM_INPUTS; ++i)
-            addInput(createInputCentered<HostPort>(Vec(28 + i * 53, 340), module, i));
-        addOutput(createOutputCentered<HostPort>(Vec(399, 340), module, FM1Host::LEFT));
-        addOutput(createOutputCentered<HostPort>(Vec(452, 340), module, FM1Host::RIGHT));
-        addParam(createParamCentered<HostKnob>(Vec(438, 247), module, FM1Host::MASTER));
+            addInput(createInputCentered<PJ301MPort>(HostPanel::jackPos(i), module, i));
+        addOutput(createOutputCentered<PJ301MPort>(HostPanel::jackPos(7), module, FM1Host::LEFT));
+        addOutput(createOutputCentered<PJ301MPort>(HostPanel::jackPos(8), module, FM1Host::RIGHT));
+        addParam(createParamCentered<RoundSmallBlackKnob>(Vec(32, 62), module, FM1Host::MASTER));
     }
     void appendContextMenu(Menu* menu) override {
         ModuleWidget::appendContextMenu(menu);

@@ -1,15 +1,15 @@
 {
-  "slug": "FirmwareHost",
-  "name": "Firmware Host",
+  "slug": "Eidolon",
+  "name": "Eidolon",
   "version": "2.0.0",
   "license": "MIT",
-  "brand": "Firmware Host",
-  "author": "Levi James Kendall and contributors",
+  "brand": "Eidolon",
+  "author": "",
   "description": "Firmware-free host for user-supplied FM-1 firmware, using the MIT fm1-emu core.",
   "modules": [
     {
       "slug": "FM1Host",
-      "name": "Firmware Host",
+      "name": "FM1 Firmware Host",
       "description": "User-supplied firmware execution with CV/MIDI, LCD and stereo audio. No firmware is included.",
       "tags": ["Synth voice", "Polyphonic", "MIDI", "Digital"]
     }
