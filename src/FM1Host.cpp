@@ -270,8 +270,11 @@ struct EncoderView : widget::FramebufferWidget {
 // Panel follows the hardware's control arrangement (no logos or trademarks).
 // All firmware controls are matrix events; right-click latches a key/button so
 // firmware button combinations remain possible with a single mouse pointer.
-// Geometry is in panel pixels; the device face occupies x 0..640, jacks x 640..690.
+// Geometry is in panel pixels: a full-height screen column on the left (x 0..378),
+// then the control cluster, function block and two-column jack block above the key bed.
 struct HostPanel : Widget {
+    // X offsets of the left control cluster, function block and key bed.
+    static constexpr float CL = 377, FB = 117, KB = 365, WIDTH = 67 * 15;
     FM1Host* module = nullptr;
     Fm1Status status{};
     std::array<uint16_t, FM1_LCD_WIDTH * FM1_LCD_HEIGHT> pixels{};
@@ -287,22 +290,22 @@ struct HostPanel : Widget {
     // Encoder index -> firmware encoder id, label, and centre.
     const std::array<int, 7> encoderIds{{0, 6, 1, 2, 3, 4, 5}};
     const std::array<const char*, 7> encoderLabels{{"SELECT", "PRESETS", "ALGORITHM", "KNOB1", "KNOB2", "KNOB3", "KNOB4"}};
-    const std::array<Vec, 7> encoderPos{{Vec(82, 62), Vec(32, 126), Vec(82, 126), Vec(404, 62), Vec(471, 62), Vec(538, 62), Vec(605, 62)}};
+    const std::array<Vec, 7> encoderPos{{Vec(CL + 82, 62), Vec(CL + 32, 126), Vec(CL + 82, 126), Vec(FB + 404, 62), Vec(FB + 471, 62), Vec(FB + 538, 62), Vec(FB + 605, 62)}};
     std::array<EncoderView*, 7> encoderViews{};
     const std::array<const char*, 14> buttonLabels{{"OCT-", "OCT+", "FX", "SEL", "ENV", "LFO", "EDIT", "GLO", "HOME", "SAVE", "ARP", "SEQ", "PLAY", "REC"}};
     // Key contacts 14..40 are chromatic from F: sharps on the top row, naturals below.
     std::array<Rect, 27> keyRects{};
     std::array<bool, 27> keyIsSharp{};
     std::array<const char*, 27> keyLabels{};
-    static constexpr float SCREEN_X = 122, SCREEN_Y = 14, SCREEN_SIZE = 236;
-    static constexpr float STATUS_X = 375 + 257 / 2.f;  // centred under the button block
+    static constexpr float SCREEN_X = 11, SCREEN_Y = 10, SCREEN_SIZE = 360;  // 1.5x the 240x240 LCD
+    static constexpr float STATUS_X = FB + 375 + 257 / 2.f;  // centred under the button block
 
     HostPanel() {
-        box.size = Vec(690, 380);
+        box.size = Vec(WIDTH, 380);
         status.abi_version = FM1_ABI_VERSION;
         static const bool sharp[12] = {false, true, false, true, false, true, false, false, true, false, true, false};
         static const char* topLabels[11] = {"OP1", "OP2", "OP3", "OP4", "OP5", "OP6", "PIT", "GLO", "MONO", "POLY", ""};
-        const float whiteX0 = 50, whiteStep = 36.2f;
+        const float whiteX0 = KB + 50, whiteStep = 36.2f;
         int white = 0, black = 0;
         for (int s = 0; s < 27; ++s) {
             keyIsSharp[s] = sharp[s % 12];
@@ -325,9 +328,9 @@ struct HostPanel : Widget {
     }
     ~HostPanel() override { if (image >= 0 && imageContext) nvgDeleteImage(imageContext, image); }
     Rect buttonRect(int id) const {
-        if (id < 2) return Rect(Vec(14 + id * 46, 168), Vec(40, 23));
+        if (id < 2) return Rect(Vec(CL + 14 + id * 46, 168), Vec(40, 23));
         int i = id - 2;
-        return Rect(Vec(386 + (i % 6) * 40.3f, 113 + (i / 6) * 40), Vec(35, 32));
+        return Rect(Vec(FB + 386 + (i % 6) * 40.3f, 113 + (i / 6) * 40), Vec(35, 32));
     }
     Rect keyRect(int id) const { return keyRects[id - 14]; }
     int keyAt(Vec p) const {
@@ -380,10 +383,11 @@ struct HostPanel : Widget {
             nvgBeginPath(vg); nvgRect(vg, SCREEN_X, SCREEN_Y, SCREEN_SIZE, SCREEN_SIZE);
             nvgFillPaint(vg, nvgImagePattern(vg, SCREEN_X, SCREEN_Y, SCREEN_SIZE, SCREEN_SIZE, 0, image, 1)); nvgFill(vg);
         } else {
-            text(vg, cx, SCREEN_Y + 85, 12, status.state == FM1_STATUS_LOADING ? "BOOTING" : "NO FIRMWARE");
-            text(vg, cx, SCREEN_Y + 107, 8, "Right-click: Import firmware", DIM);
-            text(vg, cx, SCREEN_Y + 120, 8, "or drop a .fwsc file here", DIM);
-            text(vg, cx, SCREEN_Y + 145, 7, "No firmware is included.", DIM);
+            const float cy = SCREEN_Y + SCREEN_SIZE / 2;
+            text(vg, cx, cy - 33, 14, status.state == FM1_STATUS_LOADING ? "BOOTING" : "NO FIRMWARE");
+            text(vg, cx, cy - 7, 9, "Right-click: Import firmware", DIM);
+            text(vg, cx, cy + 7, 9, "or drop a .fwsc file here", DIM);
+            text(vg, cx, cy + 35, 8, "No firmware is included.", DIM);
         }
         const char* state = status.state == FM1_STATUS_RUNNING ? "RUNNING" : status.state == FM1_STATUS_LOADING ? "LOADING" : status.state == FM1_STATUS_HALTED ? "HALTED" : status.state == FM1_STATUS_ERROR ? "ERROR" : "EMPTY";
         std::string line = state;
@@ -398,16 +402,16 @@ struct HostPanel : Widget {
         auto* vg = args.vg;
         // Module background, then the device body.
         rounded(vg, Rect(Vec(), box.size), 0, BEZEL);
-        rounded(vg, Rect(Vec(4, 6), Vec(632, 368)), 22, BODY);
+        rounded(vg, Rect(Vec(4, 6), Vec(WIDTH - 8, 368)), 22, BODY);
         drawScreen(vg);
 
-        text(vg, 32, 30, 8.5f, "MASTER");
+        text(vg, CL + 32, 30, 8.5f, "MASTER");
         for (int i = 0; i < 7; ++i)
             text(vg, encoderPos[i].x, encoderPos[i].y - 31, 8.5f, encoderLabels[i]);
 
         // Octave buttons and the 12-button function block sit in recessed wells.
-        rounded(vg, Rect(Vec(9, 162), Vec(96, 35)), 6, BEZEL);
-        rounded(vg, Rect(Vec(375, 104), Vec(257, 90)), 9, BEZEL);
+        rounded(vg, Rect(Vec(CL + 9, 162), Vec(96, 35)), 6, BEZEL);
+        rounded(vg, Rect(Vec(FB + 375, 104), Vec(257, 90)), 9, BEZEL);
         for (int i = 0; i < 14; ++i) {
             Rect r = buttonRect(i);
             bool active = latch[i] || heldKey == i;
@@ -425,7 +429,7 @@ struct HostPanel : Widget {
         }
 
         // Key bed.
-        rounded(vg, Rect(Vec(21, 258), Vec(598, 112)), 16, nvgRGB(24, 25, 27));
+        rounded(vg, Rect(Vec(KB + 21, 258), Vec(598, 112)), 16, nvgRGB(24, 25, 27));
         for (int id = 14; id < 41; ++id) {
             Rect r = keyRect(id);
             bool active = latch[id] || heldKey == id;
@@ -443,15 +447,16 @@ struct HostPanel : Widget {
                 text(vg, r.getCenter().x, r.pos.y + r.size.y - 11, 6.5f, keyLabels[id - 14]);
         }
 
-        // Jack column.
+        // Jack block: inputs on the left column, RUN/RESET and outputs on the right.
         static const char* labels[9] = {"V/OCT", "GATE", "VEL", "CC", "CLK", "RUN", "RESET", "L", "R"};
-        rounded(vg, Rect(Vec(645, 274), Vec(40, 84)), 5, nvgRGB(24, 25, 27));
+        rounded(vg, Rect(Vec(jackPos(7).x - 20, jackPos(7).y - 27), Vec(40, 87)), 5, nvgRGB(24, 25, 27));
         for (int i = 0; i < 9; ++i)
             text(vg, jackPos(i).x, jackPos(i).y - 17, 7, labels[i], i >= 7 ? INK : DIM);
         Widget::draw(args);
     }
     static Vec jackPos(int i) {
-        return Vec(665, 30 + i * 39);
+        static const int row[9] = {0, 1, 2, 3, 4, 0, 1, 3, 4};
+        return Vec(i < 5 ? 838 : 908, 30 + row[i] * 45);
     }
     void onButton(const event::Button& e) override {
         int id = keyAt(e.pos);
@@ -500,14 +505,14 @@ struct HostPanel : Widget {
 struct FM1HostWidget : ModuleWidget {
     FM1HostWidget(FM1Host* module) {
         setModule(module);
-        box.size = Vec(46 * RACK_GRID_WIDTH, RACK_GRID_HEIGHT);
+        box.size = Vec(HostPanel::WIDTH, RACK_GRID_HEIGHT);
         HostPanel* panel = new HostPanel;
         panel->module = module; addChild(panel);
         for (int i = 0; i < FM1Host::NUM_INPUTS; ++i)
             addInput(createInputCentered<PJ301MPort>(HostPanel::jackPos(i), module, i));
         addOutput(createOutputCentered<PJ301MPort>(HostPanel::jackPos(7), module, FM1Host::LEFT));
         addOutput(createOutputCentered<PJ301MPort>(HostPanel::jackPos(8), module, FM1Host::RIGHT));
-        addParam(createParamCentered<RoundSmallBlackKnob>(Vec(32, 62), module, FM1Host::MASTER));
+        addParam(createParamCentered<RoundSmallBlackKnob>(Vec(HostPanel::CL + 32, 62), module, FM1Host::MASTER));
     }
     void appendContextMenu(Menu* menu) override {
         ModuleWidget::appendContextMenu(menu);
