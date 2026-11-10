@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = ["crates/fm1-isa", "crates/fm1-core", "crates/fm1-soc"]
+
+[workspace.package]
+version = "0.4.0"
+edition = "2021"
+license = "MIT"
+
+[profile.release]
+opt-level = 3
+lto = "thin"

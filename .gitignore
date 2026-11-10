@@ -1,0 +1,21 @@
+/build/
+/dist/
+/dep/
+/plugin.so
+/plugin.dylib
+/plugin.dll
+/runtime/target/
+/vendor/fm1-emu/target/
+*.fwsc
+*.fm1save
+*.flash
+*.syx
+
+# Built binaries are published only as GitHub Release assets, never tracked.
+/prebuilt/
+*.vcvplugin
+*.dll
+*.so
+*.dylib
+*.a
+*.exe
