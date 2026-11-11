@@ -98,6 +98,9 @@ struct Shared {
     consumed: AtomicU64,
     generation: AtomicU64,
     underruns: AtomicU64,
+    // Set once a frame of the current generation reached the DSP; silence
+    // before the firmware starts its DAC is not an underrun.
+    primed: AtomicBool,
     dropped: AtomicU64,
     keys: AtomicU64,
     master: AtomicU32,
@@ -118,6 +121,7 @@ impl Shared {
             consumed: AtomicU64::new(0),
             generation: AtomicU64::new(1),
             underruns: AtomicU64::new(0),
+            primed: AtomicBool::new(false),
             dropped: AtomicU64::new(0),
             keys: AtomicU64::new(0),
             master: AtomicU32::new(1023),
@@ -370,11 +374,14 @@ pub unsafe extern "C" fn fm1_audio_read(h: *mut Fm1Handle, output: *mut f32, fra
                 h.shared.audio.pop();
                 dest.copy_from_slice(&f.samples);
                 found = true;
+                if !h.shared.primed.load(Ordering::Relaxed) {
+                    h.shared.primed.store(true, Ordering::Relaxed);
+                }
                 count += 1;
             }
             break;
         }
-        if !found && h.shared.running.load(Ordering::Relaxed) {
+        if !found && h.shared.running.load(Ordering::Relaxed) && h.shared.primed.load(Ordering::Relaxed) {
             h.shared.underruns.fetch_add(1, Ordering::Relaxed);
         }
     }

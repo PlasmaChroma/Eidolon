@@ -284,6 +284,10 @@ struct HostPanel : Widget {
     bool imageDirty = true;
     unsigned ticks = 0;
     int heldKey = -1, dragEncoder = -1;
+    // Underrun bursts seen since this firmware generation started (one per status poll that
+    // saw the counter move), and when the last one happened.
+    uint64_t underrunBase = 0;
+    unsigned underrunBursts = 0, lastUnderrunTick = 0;
     float dragAccum = 0;
     // Encoder index -> firmware encoder id, label, and centre.
     const std::array<int, 7> encoderIds{{0, 6, 1, 2, 3, 4, 5}};
@@ -373,8 +377,13 @@ struct HostPanel : Widget {
                 if (pendingKey[i] && fm1_key(module->runtime, i, wantedKey[i])) pendingKey[i] = false;
         if (++ticks % 2 || !module) return;
         const uint64_t oldGeneration = status.generation;
-        if (module->readStatus(status) && oldGeneration != status.generation) {
-            latch.fill(false); wantedKey.fill(false); pendingKey.fill(false);
+        if (module->readStatus(status)) {
+            if (oldGeneration != status.generation) {
+                latch.fill(false); wantedKey.fill(false); pendingKey.fill(false);
+                underrunBase = status.underrun_frames; underrunBursts = 0;
+            } else if (status.underrun_frames > underrunBase) {
+                underrunBase = status.underrun_frames; ++underrunBursts; lastUnderrunTick = ticks;
+            }
         }
         if (module->runtime && fm1_try_copy_lcd(module->runtime, pixels.data(), pixels.size())) {
             for (size_t i = 0; i < pixels.size(); ++i) {
@@ -409,7 +418,10 @@ struct HostPanel : Widget {
         if (status.state == FM1_STATUS_RUNNING)
             line += string::f("  %.1fx  %u MHz", status.realtime_speed, status.clock_mhz);
         const float statusX = funcWell.getCenter().x, statusY = funcWell.getBottom() + 18;
-        text(vg, statusX, statusY, 7, line, DIM);
+        const bool recentUnderrun = underrunBursts && ticks - lastUnderrunTick < 120;  // ~2 s
+        if (underrunBursts)
+            line += string::f("  %u underrun%s", underrunBursts, underrunBursts == 1 ? "" : "s");
+        text(vg, statusX, statusY, 7, line, recentUnderrun ? nvgRGB(240, 110, 90) : DIM);
         std::string message(status.message);
         if (message.size() > 44) message = message.substr(0, 43) + "...";
         text(vg, statusX, statusY + 12, 6.5f, message, DIM);

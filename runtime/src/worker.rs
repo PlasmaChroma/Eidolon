@@ -101,6 +101,7 @@ impl Worker {
     }
     fn bump(&mut self) {
         self.shared.keys.store(0, Ordering::Relaxed);
+        self.shared.primed.store(false, Ordering::Relaxed);
         self.shared.generation.fetch_add(1, Ordering::AcqRel);
         self.pending.clear();
         self.made = self.shared.consumed.load(Ordering::Acquire);
