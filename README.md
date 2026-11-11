@@ -143,7 +143,7 @@ Rack's custom module JSON contains only:
   "firmwareSha256": "64 lowercase hexadecimal characters",
   "stateId": "64 lowercase hexadecimal characters",
   "clockMhz": 240,
-  "leadFrames": 512
+  "leadFrames": 1024
 }
 ```
 
@@ -169,8 +169,8 @@ your imported files or old sessions behind your back.
 
 ## Latency and CPU
 
-The default clock is 240 MHz and the default lead is 512 frames at a nominal
-44.1 kHz (~11.6 ms). The menu offers 256, 512, 1024, 2048 and 4096 frames. This
+The default clock is 240 MHz and the default lead is 1024 frames at a nominal
+44.1 kHz (~23.2 ms). The menu offers 256, 512, 1024, 2048 and 4096 frames. This
 is only the emulator's buffering, not total key-to-speaker latency: firmware
 scan/DMA timing and Rack/audio-device buffering also contribute. No automatic
 latency compensation is added to other Rack signal paths.

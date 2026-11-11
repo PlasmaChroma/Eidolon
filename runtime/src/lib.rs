@@ -53,7 +53,7 @@ impl Default for Fm1Status {
         Self {
             abi_version: ABI,
             state: EMPTY,
-            lead_frames: 512,
+            lead_frames: 1024,
             clock_mhz: 240,
             generation: 1,
             audio_frame: 0,
@@ -121,7 +121,7 @@ impl Shared {
             dropped: AtomicU64::new(0),
             keys: AtomicU64::new(0),
             master: AtomicU32::new(1023),
-            lead: AtomicU32::new(512),
+            lead: AtomicU32::new(1024),
             clock: AtomicU32::new(240),
             quit: AtomicBool::new(false),
             running: AtomicBool::new(false),

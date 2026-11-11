@@ -21,7 +21,7 @@ struct FM1Host : Module {
     StereoSrc src;
     Edge clockEdge, runEdge, resetEdge;
     std::atomic<bool> resetDsp{false};
-    std::atomic<unsigned> clockMhz{240}, leadFrames{512};
+    std::atomic<unsigned> clockMhz{240}, leadFrames{1024};
     std::atomic<bool> panicRequested{false};
     CcRateLimiter ccLimiter;
     int oldCc = -1, oldCcNumber = -1, oldCcChannel = -1;
@@ -129,7 +129,7 @@ struct FM1Host : Module {
             firmwareHash = sha; stateId = id; expectedHash = sha; pendingUnload = sha.empty();
             pendingPreviousId = before.state_id;
         }
-        unsigned clock = 240, lead = 512;
+        unsigned clock = 240, lead = 1024;
         auto c = json_integer_value(json_object_get(root, "clockMhz"));
         if (c == 120 || c == 160 || c == 240 || c == 320 || c == 400) clock = static_cast<unsigned>(c);
         auto l = json_integer_value(json_object_get(root, "leadFrames"));
