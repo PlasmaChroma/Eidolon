@@ -48,7 +48,7 @@ int main(int argc, char** argv) {
     assert(init);
     {
         rack::plugin::Plugin plugin;
-        plugin.slug = "FirmwareHost";
+        plugin.slug = "Eidolon";
         plugin.path = ".";
         init(&plugin);
         assert(plugin.models.size() == 1);
@@ -94,7 +94,7 @@ int main(int argc, char** argv) {
     rack::contextSet(nullptr);
     dlclose(library);
     // Only the empty cache directories created by this test are removed.
-    const std::string cache = std::string(root) + "/FirmwareHost";
+    const std::string cache = std::string(root) + "/Eidolon";
     rmdir((cache + "/firmware").c_str());
     rmdir((cache + "/state").c_str());
     rmdir(cache.c_str());

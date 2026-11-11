@@ -48,7 +48,7 @@ struct FM1Host : Module {
         configInput(RESET, "Restart transport (MIDI Stop, position zero, Start)");
         configOutput(LEFT, "Left audio (+/-5 V nominal)");
         configOutput(RIGHT, "Right audio (+/-5 V nominal)");
-        const std::string root = asset::user("FirmwareHost");
+        const std::string root = asset::user("Eidolon");
         if (fm1_abi_version() == FM1_ABI_VERSION) runtime = fm1_create(root.c_str());
     }
     ~FM1Host() override { if (runtime) fm1_destroy(runtime); }

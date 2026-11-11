@@ -53,7 +53,7 @@ make dist RACK_DIR=/absolute/path/to/Rack-SDK
 ```
 
 The output package is
-`dist/FirmwareHost-2.0.0-<platform>.vcvplugin`. Place the package in the Rack
+`dist/Eidolon-2.0.0-<platform>.vcvplugin`. Place the package in the Rack
 user folder's `plugins-<platform>` directory and restart Rack, or build with
 the SDK's usual `make install` after confirming the destination.
 
@@ -124,7 +124,7 @@ hardware events and do not depend on the firmware's MIDI mapping.
 
 ## Firmware and patch storage
 
-All imported material stays under **`<Rack user folder>/FirmwareHost/`**:
+All imported material stays under **`<Rack user folder>/Eidolon/`**:
 
 ```text
 firmware/<sha256>.fwsc

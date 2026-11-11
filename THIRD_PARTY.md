@@ -66,5 +66,5 @@ The MIT license of this project does not grant permission to sell a non-GPL
 Rack plugin without any separate permission required by VCV. Hardware brand,
 model, screen artwork in user firmware, and firmware licenses are separate.
 
-The panel here is a new FirmwareHost layout. It is not an official M-VAVE or
+The panel here is a new Eidolon layout. It is not an official M-VAVE or
 VCV product, and neither company endorses it.
