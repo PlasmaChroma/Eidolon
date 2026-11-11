@@ -336,6 +336,10 @@ pub struct Soc {
     /// did nothing, and a core 1 that idles and feeds the watchdog each round, Bubba
     /// Machine's, cost as much as a busy one).
     pub cpu1_idle: bool,
+    /// Core 1's runs in a row that spent their whole budget without coming back to where they
+    /// began (`run_cpu1_in`): busy, not polling. While it stays so, its runs skip the probe for a
+    /// polling loop, but for every `PROBE_EVERY`th, which looks again.
+    pub cpu1_busy_runs: u32,
     /// A fault on core 1 (an instruction it could not run: a jump into erased flash, COSMOS
     /// 0.23's package has its core 1 entry in a hole of 0xFF) stops that core alone and cpu0
     /// goes on, as the chip's would (felucca-bsp's `cpu2_fallback` is built for a core 1 that
@@ -536,6 +540,7 @@ impl Soc {
             cpu1_release: false,
             cpu1_released_once: false,
             cpu1_idle: false,
+            cpu1_busy_runs: 0,
             cpu1_survives: false,
             cpu1_fault: None,
             audio_trace: std::env::var_os("FM1_AUDIO_TRACE").is_some(),

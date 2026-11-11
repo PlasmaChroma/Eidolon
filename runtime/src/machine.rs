@@ -37,6 +37,10 @@ impl Machine {
             }
             soc.restore_flash(f);
         }
+        // Decode the firmware's XIP code now, while loading, rather than in an audio period
+        // the first time each path runs (~0.7 s here; removes most first-run stalls).
+        let xip_end = fm1_soc::XIP_BASE + soc.xip.len() as u32;
+        cpu.prewarm_xip(&mut soc, fm1_soc::XIP_BASE, xip_end);
         Ok(Self {
             cpu,
             cpu1: None,

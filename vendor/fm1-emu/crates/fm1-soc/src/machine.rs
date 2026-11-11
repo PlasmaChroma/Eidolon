@@ -716,7 +716,11 @@ fn run_cpu1_in(c1: &mut Cpu, soc: &mut Soc, cycles: u64, probe: (u32, [u32; 16],
     // `lockclr` (`Core1Bus::until`), one that clears a byte lock at the end of a short call
     // (`SPIN_CALL`: the budget holds to the instruction, so compiled code and the interpreter
     // end at the same one, and what cpu0 misses of the release is the same in both, and little).
-    let mut probing = if until.is_some() { 0 } else { 512u64 };
+    // (busy: core 1 spent its last runs' budgets whole, never back where it began; the probe only
+    // ever ends a run early at a polling loop, a run without it ends in the same state, later)
+    let busy_run = soc.cpu1_busy_runs >= PROBE_AFTER && soc.cpu1_busy_runs % PROBE_EVERY != 0;
+    let mut probing = if until.is_some() || busy_run { 0 } else { 512u64 };
+    let mut polled = false;
     while left > 0 {
         let irq = if soc.periph.any_pending() { soc.pending_irq_for(1) } else { None };
         if let Some((irq, prio)) = irq {
@@ -733,7 +737,7 @@ fn run_cpu1_in(c1: &mut Cpu, soc: &mut Soc, cycles: u64, probe: (u32, [u32; 16],
         // same points. (Melodee 1.4.5's core 1 polls in most slices, about 22 blocks a pass; a
         // call each was 12% of a Pixel 7 Pro's time.)
         let stretch = probing > 0 && irq.is_none() && c1.jit_on && c1.stop_checks;
-        let busy = if probing > 0 { 0 } else { left.min(if matches!(until, Some(Wait::Byte(_))) { SPIN_CALL } else { 256 }) };
+        let busy = if probing > 0 { 0 } else { left.min(if matches!(until, Some(Wait::Byte(_))) { SPIN_CALL } else { BUSY_CALL }) };
         // (a stretch: its last call may end up to `STRETCH_ROOM` past what is left, and its ticks
         // never run out)
         let span = if stretch { probing.min(left) + fm1_core::STRETCH_ROOM as u64 } else { busy };
@@ -782,14 +786,28 @@ fn run_cpu1_in(c1: &mut Cpu, soc: &mut Soc, cycles: u64, probe: (u32, [u32; 16],
             break; // asleep (`Core1Bus::idle`)
         }
         if c1.pc == probe.0 && c1.sp == probe.2 && c1.regs == probe.1 {
+            polled = true;
             break; // polling with nothing to do
         }
         if until.is_some_and(|w| !soc.still_waits(0, w)) {
             break; // cpu0 would get what it spins on now: back to it
         }
     }
+    if polled || soc.cpu1_idle {
+        soc.cpu1_busy_runs = 0;
+    } else if left == 0 {
+        soc.cpu1_busy_runs = soc.cpu1_busy_runs.wrapping_add(1);
+    }
     Ok(budget - left)
 }
+
+/// `run_cpu1_in`: busy runs in a row before core 1's runs stop probing for a polling loop, and
+/// how often a busy one probes again all the same.
+const PROBE_AFTER: u32 = 4;
+const PROBE_EVERY: u32 = 16;
+/// `run_cpu1_in`: a busy core 1's instructions per call (it was 256: a slice's are fewer, so
+/// this is one call a slice).
+const BUSY_CALL: u64 = 4096;
 
 /// cpu1's calls while cpu0 spins on a byte lock it holds (`run_cpu1`'s `until`): how far past
 /// the store that clears it cpu1 may run before cpu0 sees it (compiled code stores RAM without

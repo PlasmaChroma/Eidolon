@@ -21,6 +21,18 @@ instruction decoder is upstream emulator source, not a firmware image.
    the user-supplied package determines its own initial content.
 5. A read-only MIDI-ready accessor exposes UART initialization state, allowing
    the bridge to apply backpressure without dropping/splitting messages.
+6. Performance patches written for this host and not yet offered upstream.
+   Each is one commit on a branch of a local fm1-emu checkout, cut from the
+   pinned commit above; keep them until an upstream release includes them, or
+   drop them when re-pinning if upstream solves the same problem differently.
+   - `core1-dispatch-perf` (`fm1-soc`): a busy core 1 stops probing for a
+     polling loop every slice and runs one call per slice instead of calls of
+     256 instructions. Stock V16 with notes: 1.03x to 1.46x realtime headless;
+     audio bit-identical.
+   - `prewarm-xip` (`fm1-core`): `Cpu::prewarm_xip` decodes the XIP image
+     ahead of time, filling only empty instruction-cache lines. Called by
+     `runtime/src/machine.rs` after boot (~0.7 s at load); removes most
+     first-run decode stalls of up to ~15 ms. Nothing upstream calls it.
 
 The new runtime, C ABI, Rack adapter and panel live outside the vendor folder.
 The native host initialization intentionally follows upstream `fm1-live`:

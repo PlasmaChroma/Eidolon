@@ -535,6 +535,28 @@ impl Cpu {
         self.fetch_at(bus, self.pc)
     }
 
+    /// Decode ahead of time every halfword of XIP code in `start..end` whose cache line is
+    /// still empty, so that code reached later (a preset, a menu, a note's first voice) does
+    /// not stop to decode on the way: in a plugin, that first run of new code was a stall of up
+    /// to ~17 ms in a 10 ms audio period. Decoding is a function of the bytes alone (XIP cannot
+    /// change), and a line is found only by its exact pc, so lines decoded from the middle of
+    /// an instruction or from data are never used. Lines already there (code that has run) stay:
+    /// past 2^ICACHE_BITS halfwords, XIP lines share slots. Returns the lines decoded.
+    pub fn prewarm_xip<B: Bus>(&mut self, bus: &mut B, start: u32, end: u32) -> u32 {
+        let mut decoded = 0;
+        let start = start.max(0x0200_0000) & !1;
+        let end = end.min(0x0400_0000);
+        let mut pc = start;
+        while pc < end {
+            let filled = self.icache.get(icache_slot(pc)).is_some_and(|l| l.pc != Line::EMPTY.pc);
+            if !filled && self.fetch_at(bus, pc).is_ok() {
+                decoded += 1;
+            }
+            pc += 2;
+        }
+        decoded
+    }
+
     fn fetch_at<B: Bus>(&mut self, bus: &mut B, pc: u32) -> Result<usize, CoreError> {
         if self.icache.is_empty() {
             self.icache = vec![Line::EMPTY; ICACHE_LINES];
