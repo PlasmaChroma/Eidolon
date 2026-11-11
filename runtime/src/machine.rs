@@ -5,9 +5,21 @@ pub struct Machine {
     pub cpu: Cpu,
     pub cpu1: Option<Cpu>,
     pub soc: Soc,
+    /// The package's identity (`FM-1_917`, ...), from its header.
+    pub identity: String,
     pending: bool,
 }
 impl Machine {
+    /// The package's own flash image, as `boot` installs it before any saved state: the base
+    /// that saved states are stored as differences from (`Store::save_state`).
+    pub fn base_flash(pkg: &[u8]) -> Result<Vec<u8>, String> {
+        let st = std::panic::catch_unwind(|| fm1_soc::stock_from_package(pkg, None))
+            .map_err(|_| "Malformed firmware package".to_owned())??;
+        if st.flash.len() != fm1_soc::FLASH_SIZE {
+            return Err("Invalid firmware memory layout".into());
+        }
+        Ok(st.flash)
+    }
     pub fn boot(pkg: &[u8], flash: Option<&[u8]>, mhz: u32) -> Result<Self, String> {
         let st = std::panic::catch_unwind(|| fm1_soc::stock_from_package(pkg, None))
             .map_err(|_| "Malformed firmware package".to_owned())??;
@@ -20,6 +32,7 @@ impl Machine {
         {
             return Err("Invalid firmware memory layout".into());
         }
+        let identity = st.identity.clone();
         let mut soc = Soc::new(RAM_SIZE, st.xip);
         soc.periph.hz = mhz as u64 * 1_000_000;
         soc.periph.skip_idle = true;
@@ -45,6 +58,7 @@ impl Machine {
             cpu,
             cpu1: None,
             soc,
+            identity,
             pending: false,
         })
     }

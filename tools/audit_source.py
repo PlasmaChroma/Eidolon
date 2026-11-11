@@ -11,7 +11,9 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 SKIP = {".git", "build", "dist", "target", "__pycache__", ".pytest_cache"}
 FORBIDDEN = {".fwsc", ".fm1save", ".flash", ".syx", ".sysex", ".rom", ".hex", ".uf2"}
-PATCH_KEYS = {"schema", "firmwareSha256", "stateId", "clockMhz", "leadFrames"}
+# Written keys. flashDelta carries the firmware's own flash writes (sectors that differ from
+# the package image), never package bytes; stateId is only read, from schema-1 patches.
+PATCH_KEYS = {"schema", "firmwareSha256", "flashDelta", "clockMhz", "leadFrames"}
 errors = []
 
 def check(condition, message):
@@ -45,8 +47,9 @@ if frontend.is_file():
     check(not re.search(r'\bjson_(?:object_set(?!_new)|object_update\w*|pack|array\w*)\s*\(', code),
           "Unexpected JSON construction bypasses the explicit patch-key whitelist")
     check("getPatchStorageDirectory" not in code, "Patch storage must not contain emulated flash/firmware")
-    check("base64" not in code.lower(), "Unexpected base64 serialization in Rack frontend")
-    for key in ("firmwareSha256", "stateId"):
+    check(len(re.findall(r"toBase64\s*\(", code)) == 1 and "toBase64(delta)" in code,
+          "Base64 serialization other than the flash delta in Rack frontend")
+    for key in ("firmwareSha256", "stateId", "flashDelta"):
         direct = re.search(r'json_object_get\s*\([^,]+,\s*"' + key + r'"', code)
         helper = re.search(r'getString\s*\(\s*"' + key + r'"', code)
         check(direct or helper, f"Missing identity restore key: {key}")
@@ -60,4 +63,4 @@ if errors:
     for error in errors:
         print(" - " + error, file=sys.stderr)
     sys.exit(1)
-print(f"Firmware-free source audit: PASS ({len(files)} files; patch state is identity/options only)")
+print(f"Firmware-free source audit: PASS ({len(files)} files; patches: identity, options, flash delta)")

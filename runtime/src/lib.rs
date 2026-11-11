@@ -95,6 +95,9 @@ struct Shared {
     audio: Ring<AudioFrame, AUDIO_CAP>,
     midi: Ring<MidiEvent, MIDI_CAP>,
     view: Mutex<View>,
+    /// The current firmware's flash as a delta over its package image (`store::encode_delta`),
+    /// refreshed when flash writes settle: what Rack embeds in the patch.
+    flash_delta: Mutex<Vec<u8>>,
     consumed: AtomicU64,
     generation: AtomicU64,
     underruns: AtomicU64,
@@ -118,6 +121,7 @@ impl Shared {
                 status: Fm1Status::default(),
                 lcd: vec![0; PIXELS],
             }),
+            flash_delta: Mutex::new(Vec::new()),
             consumed: AtomicU64::new(0),
             generation: AtomicU64::new(1),
             underruns: AtomicU64::new(0),
@@ -141,6 +145,7 @@ impl Shared {
 enum Command {
     LoadPath(PathBuf),
     LoadCached(String, String),
+    LoadPatch(String, Vec<u8>),
     Unload,
     Reset,
     Save,
@@ -239,6 +244,33 @@ pub unsafe extern "C" fn fm1_load_cached(
             return 0;
         }
         send(h, Command::LoadCached(hash, id))
+    })
+}
+#[no_mangle]
+pub unsafe extern "C" fn fm1_load_cached_flash(
+    h: *mut Fm1Handle,
+    hash: *const c_char,
+    delta: *const u8,
+    len: u32,
+) -> i32 {
+    guarded(0, || {
+        let Some(hash) = string(hash) else { return 0 };
+        if !store::valid_id(&hash) || delta.is_null() || len as usize > store::MAX_DELTA {
+            return 0;
+        }
+        let bytes = std::slice::from_raw_parts(delta, len as usize).to_vec();
+        send(h, Command::LoadPatch(hash, bytes))
+    })
+}
+#[no_mangle]
+pub unsafe extern "C" fn fm1_copy_flash_delta(h: *mut Fm1Handle, out: *mut u8, capacity: u32) -> u32 {
+    guarded(0, || {
+        let Some(h) = h.as_ref() else { return 0 };
+        let Ok(d) = h.shared.flash_delta.lock() else { return 0 };
+        if !out.is_null() && d.len() <= capacity as usize {
+            std::ptr::copy_nonoverlapping(d.as_ptr(), out, d.len());
+        }
+        d.len() as u32
     })
 }
 #[no_mangle]

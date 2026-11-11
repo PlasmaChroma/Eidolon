@@ -43,9 +43,16 @@ Fm1Handle* fm1_create(const char* data_root);
 void fm1_destroy(Fm1Handle* handle);
 /* Asynchronous requests: 1 = queued, 0 = invalid/full; inspect status later. */
 int32_t fm1_load_path(Fm1Handle* handle, const char* user_fwsc_path);
-/* A cached load forks state into a new local session, preventing duplicated
- * modules from overwriting the same flash file. Empty state_id = fresh boot. */
+/* A cached package, booted fresh (empty state_id) or, for patches saved before
+ * flash was embedded, over a legacy local state file. status.state_id is empty. */
 int32_t fm1_load_cached(Fm1Handle* handle, const char* sha256, const char* state_id);
+/* A cached package over a flash delta from a patch (fm1_copy_flash_delta's bytes,
+ * copied). A delta that does not fit this package boots it fresh and says so. */
+int32_t fm1_load_cached_flash(Fm1Handle* handle, const char* sha256, const uint8_t* delta, uint32_t len);
+/* UI ONLY (may wait briefly). The current flash as a delta over the package image, refreshed
+ * when flash writes settle (and on fm1_request_save). Returns its length; copies it only
+ * when out is non-null and capacity suffices. 0 = no firmware. */
+uint32_t fm1_copy_flash_delta(Fm1Handle* handle, uint8_t* out, uint32_t capacity);
 int32_t fm1_unload(Fm1Handle* handle);
 int32_t fm1_reset(Fm1Handle* handle);
 int32_t fm1_request_save(Fm1Handle* handle);

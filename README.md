@@ -5,8 +5,9 @@ emulator. The module executes a **user-supplied compiled `.fwsc` package**;
 it is not a source-level reimplementation of a particular synth engine.
 
 **No firmware is included, downloaded, or embedded in Rack patches.** This
-includes stock recovery images, third-party firmware, factory sound banks,
-the M-VAVE binary SDK, and emulated flash snapshots. An empty module is silent.
+includes stock recovery images, third-party firmware, factory sound banks and
+the M-VAVE binary SDK. Patches carry only what the firmware itself wrote to its
+flash (see below). An empty module is silent.
 
 This is a development starter, not a firmware-compatibility-certified release.
 See `docs/VALIDATION.md` for what was actually built and tested. No real
@@ -25,8 +26,9 @@ testing with your own lawful firmware files.
   master ADC control, and the emulated LEDs.
 - Polyphonic pitch/gate/velocity to MIDI, a CC input, 24-PPQN MIDI clock,
   transport start/stop/reset, and stereo audio outputs.
-- Local content-addressed firmware import and checksummed local flash state.
-- Strict patch metadata whitelist: schema, firmware SHA-256, local session ID,
+- Local content-addressed firmware import; each instance's flash changes are
+  saved in the patch as a checksummed sector delta.
+- Strict patch metadata whitelist: schema, firmware SHA-256, flash delta,
   CPU clock and buffer lead. Ordinary host controls are Rack parameters.
 - No browser, WebAssembly host, DAW plugin wrapper, networking, automatic
   firmware catalog, device flasher, or firmware-inclusive save export.
@@ -124,48 +126,45 @@ hardware events and do not depend on the firmware's MIDI mapping.
 
 ## Firmware and patch storage
 
-All imported material stays under **`<Rack user folder>/Eidolon/`**:
+Imported packages stay under **`<Rack user folder>/Eidolon/`**:
 
 ```text
 firmware/<sha256>.fwsc
-state/<firmware-sha256>/<local-session-id>.flash
+firmware/<sha256>.json       (name and identity, for "Load cached firmware")
 ```
 
-The `.flash` file is a private local device snapshot and **may contain firmware
-and resources**. It is not a portable, firmware-free preset. Neither it nor
-its changed sectors are placed in Rack patch storage.
-
-Rack's custom module JSON contains only:
+Rack's custom module JSON contains:
 
 ```json
 {
-  "schema": 1,
+  "schema": 2,
   "firmwareSha256": "64 lowercase hexadecimal characters",
-  "stateId": "64 lowercase hexadecimal characters",
+  "flashDelta": "base64",
   "clockMhz": 240,
   "leadFrames": 1024
 }
 ```
 
-The example strings explain the fields; real patches contain validated
-identifiers. No absolute original file path, package bytes, base64, flash data,
-samples, or firmware download URL is serialized. Copying a patch to another
-computer does not transfer the instrument. That computer must have the exact
-matching package and relevant local state. Missing content produces a clear
-error, not an automatic download or a silent substitution.
+`flashDelta` is what the firmware has written to its flash (presets, settings,
+its small file system): only the 4 KiB sectors that differ from the package's
+own image, typically 4-56 KiB, with checksums of that image and of the rebuilt
+flash. It is refreshed when the firmware's flash writes settle and saved
+whenever Rack saves or autosaves the patch, so each module instance (and each
+duplicate, copy or module preset) carries its own flash.
 
-Importing a package makes a new local session. Restoring an existing session
-forks it so duplicated module instances do not overwrite one another. Local
-flash changes are saved after writes settle, on request, and best-effort at
-shutdown. Firmware edits held only in emulated RAM still need the firmware's
-own Save command. Use **Save local flash now** after that operation.
+**The package itself is never placed in a patch**, and neither is its path.
+Copying a patch to another computer transfers the flash changes, not the
+instrument: that computer needs the exact package imported locally. A missing
+package produces a clear error, not an automatic download or a silent
+substitution. A flash delta that does not fit the package boots it fresh and
+says so on the panel.
 
-**Current persistence limitation:** the session file represents the latest
-local device state, not an immutable checkpoint at each Rack Save. Later
-firmware saves can change what an earlier patch referencing that session will
-restore. Exact historical patch snapshots are a next milestone. The local
-store intentionally has no automatic garbage collection yet; nothing deletes
-your imported files or old sessions behind your back.
+What a firmware writes to flash is up to the firmware. Data it copies there
+(for example resources unpacked on first boot) travels with patches you share.
+
+Schema 1 patches (before flash was embedded) referred to a local state file,
+`state/<firmware-sha256>/<id>.flash`; they still load from it, and their next
+save embeds the flash. Nothing is written to `state/` any more.
 
 ## Latency and CPU
 
@@ -183,9 +182,8 @@ bandlimited conversion and stricter hardware-timing modes are future work.
 
 Emulating a processor is heavier than running native synth DSP. Watch the
 status/underrun counters and benchmark your actual firmware before lowering
-the lead. Flash persistence currently performs disk I/O on the machine worker
-(never the Rack DSP callback), so slow disks can still cause an underrun while
-saving. A separate snapshot-writer thread is planned.
+the lead. Flash persistence performs no disk I/O on the machine worker: it only
+refreshes the in-memory delta that Rack serializes with the patch.
 
 ## Tests and source package
 

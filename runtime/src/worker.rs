@@ -1,12 +1,12 @@
 use crate::{
     machine::Machine,
-    store::{session_id, Store},
+    store::{self, Store},
     *,
 };
 use fm1_soc::Action;
 use std::{
     collections::VecDeque,
-    sync::mpsc::{self, Receiver, Sender},
+    sync::mpsc::Receiver,
     thread,
     time::{Duration, Instant},
 };
@@ -15,7 +15,10 @@ struct Active {
     machine: Machine,
     package: Vec<u8>,
     hash: String,
-    id: String,
+    /// The flash as last published or loaded (an unchanged flash is not published again), and
+    /// the package's own image (the published delta holds only the sectors that differ).
+    saved: Vec<u8>,
+    base: Vec<u8>,
     halted: bool,
     revision: u32,
     changed: Instant,
@@ -25,55 +28,16 @@ struct Active {
     master: u16,
     keys: u64,
 }
-// Flash snapshots are hashed, written and fsynced here, off the machine
-// thread, so a save never stalls emulation. One FIFO thread: writes for the
-// same state land in submission order; a backlog for one state is coalesced.
-struct Saver {
-    tx: Option<Sender<(String, String, Box<[u8]>)>>,
-    thread: Option<thread::JoinHandle<()>>,
-}
-impl Saver {
-    fn new(shared: Arc<Shared>, store: Store) -> Self {
-        let (tx, rx) = mpsc::channel::<(String, String, Box<[u8]>)>();
-        let thread = thread::Builder::new()
-            .name("fm1-rack-save".into())
-            .spawn(move || {
-                while let Ok(first) = rx.recv() {
-                    let mut batch = vec![first];
-                    batch.extend(rx.try_iter());
-                    for (i, (hash, id, flash)) in batch.iter().enumerate() {
-                        if batch[i + 1..].iter().any(|(h, d, _)| h == hash && d == id) {
-                            continue; // superseded by a newer snapshot of the same state
-                        }
-                        if let Err(e) = store.save_state(hash, id, flash) {
-                            if let Ok(mut v) = shared.view.lock() {
-                                put(&mut v.status.message, &format!("Local flash save failed: {e}"));
-                            }
-                        }
-                    }
-                }
-            })
-            .ok();
-        Self { tx: Some(tx), thread }
-    }
-    fn submit(&self, hash: &str, id: &str, flash: &[u8]) -> Result<(), String> {
-        self.tx
-            .as_ref()
-            .and_then(|tx| tx.send((hash.to_owned(), id.to_owned(), flash.into())).ok())
-            .ok_or_else(|| "Local flash saver is not running".to_owned())
-    }
-    /// Writes everything submitted so far, then stops the thread.
-    fn finish(&mut self) {
-        self.tx = None;
-        if let Some(t) = self.thread.take() {
-            let _ = t.join();
-        }
-    }
+/// Where a load's flash comes from: the package alone, a patch's embedded delta, or (patches
+/// saved before deltas were embedded) a state file in the local store.
+enum StateSource {
+    Fresh,
+    Patch(Vec<u8>),
+    Legacy(String),
 }
 struct Worker {
     shared: Arc<Shared>,
     store: Store,
-    saver: Saver,
     active: Option<Active>,
     pending: VecDeque<MidiEvent>,
     made: u64,
@@ -145,26 +109,37 @@ impl Worker {
         }
         a.last_save = Instant::now();
         a.save_requested = false;
-        self.saver
-            .submit(&a.hash, &a.id, &a.machine.soc.flash.mem)?;
         a.dirty = false;
+        // (a firmware that rewrites what is already there, as at every boot: nothing new)
+        if a.machine.soc.flash.mem == a.saved {
+            return Ok(());
+        }
+        let delta = store::encode_delta(&a.hash, &a.machine.soc.flash.mem, &a.base)?;
+        *self.shared.flash_delta.lock().map_err(|_| "Flash state unavailable")? = delta;
+        a.saved.copy_from_slice(&a.machine.soc.flash.mem);
         Ok(())
     }
     fn install(
         &mut self,
         package: Vec<u8>,
         expected: Option<String>,
-        state: Option<String>,
+        state: StateSource,
+        name: Option<String>,
     ) -> Result<(), String> {
         let hash = sha256::hex(&package);
         if expected.as_ref().is_some_and(|e| *e != hash) {
             return Err("Firmware checksum mismatch".into());
         }
-        let saved = state
-            .as_ref()
-            .filter(|s| !s.is_empty())
-            .map(|s| self.store.read_state(&hash, s))
-            .transpose()?;
+        let base = Machine::base_flash(&package)?;
+        // A saved state that cannot be restored (a damaged patch, a deleted legacy file, one
+        // saved over another image) does not stop the firmware: it boots fresh and says so.
+        let found = match state {
+            StateSource::Fresh => None,
+            StateSource::Legacy(id) => Some(self.store.read_state(&hash, &id, &base)),
+            StateSource::Patch(delta) => Some(store::decode_delta(&hash, &delta, &base)),
+        };
+        let restored = !matches!(found, Some(Err(_)));
+        let saved = found.and_then(Result::ok);
         // Fully validate before creating a cache package or replacing the live machine.
         let machine = Machine::boot(
             &package,
@@ -172,15 +147,19 @@ impl Worker {
             self.shared.clock.load(Ordering::Relaxed),
         )?;
         self.save_current(true)?;
-        let id = session_id();
         self.store.install(&hash, &package)?;
-        self.store.save_state(&hash, &id, &machine.soc.flash.mem)?;
+        // (the menu's listing only: a failure to write it does not fail the load)
+        let _ = self.store.write_meta(&hash, name.as_deref(), &machine.identity);
+        let saved_flash = machine.soc.flash.mem.clone();
+        let delta = store::encode_delta(&hash, &saved_flash, &base)?;
+        *self.shared.flash_delta.lock().map_err(|_| "Flash state unavailable")? = delta;
         let revision = machine.soc.flash.revision;
         self.active = Some(Active {
             machine,
             package,
             hash: hash.clone(),
-            id: id.clone(),
+            saved: saved_flash,
+            base,
             halted: false,
             revision,
             changed: Instant::now(),
@@ -199,10 +178,14 @@ impl Worker {
             .map_err(|_| "Display state unavailable")?;
         v.status.state = RUNNING;
         put(&mut v.status.firmware_sha256, &hash);
-        put(&mut v.status.state_id, &id);
+        put(&mut v.status.state_id, "");
         put(
             &mut v.status.message,
-            "User firmware loaded; local flash state only",
+            if restored {
+                "User firmware loaded"
+            } else {
+                "Saved flash missing or unreadable; booted fresh"
+            },
         );
         v.status.realtime_speed = 0.;
         v.status.leds = [0.; 41];
@@ -235,17 +218,28 @@ impl Worker {
                 self.shared
                     .message(LOADING, "Validating user-supplied firmware");
                 let package = self.store.read_user(&path)?;
-                self.install(package, None, None)?;
+                let name = path.file_name().and_then(|n| n.to_str()).map(str::to_owned);
+                self.install(package, None, StateSource::Fresh, name)?;
             }
             Command::LoadCached(hash, id) => {
                 self.shared
                     .message(LOADING, "Restoring user-local firmware and flash");
                 let p = self.store.read_package(&hash)?;
-                self.install(p, Some(hash), Some(id))?;
+                let source = if id.is_empty() { StateSource::Fresh } else { StateSource::Legacy(id) };
+                self.install(p, Some(hash), source, None)?;
+            }
+            Command::LoadPatch(hash, delta) => {
+                self.shared
+                    .message(LOADING, "Restoring firmware with the patch's flash");
+                let p = self.store.read_package(&hash)?;
+                self.install(p, Some(hash), StateSource::Patch(delta), None)?;
             }
             Command::Unload => {
                 self.save_current(true)?;
                 self.active = None;
+                if let Ok(mut d) = self.shared.flash_delta.lock() {
+                    d.clear();
+                }
                 self.bump();
                 self.shared.running.store(false, Ordering::Release);
                 let mut v = self
@@ -455,7 +449,6 @@ impl Worker {
             }
         }
         let _ = self.save_current(false);
-        self.saver.finish();
     }
 }
 /// The machine thread keeps a small audio lead, so it must wake on time and not be preempted
@@ -502,11 +495,9 @@ impl Drop for Realtime {
 pub fn run(shared: Arc<Shared>, commands: Receiver<Command>, store: Store) {
     #[cfg(windows)]
     let _realtime = Realtime::enter();
-    let saver = Saver::new(shared.clone(), store.clone());
     let mut w = Worker {
         shared,
         store,
-        saver,
         active: None,
         pending: VecDeque::with_capacity(MIDI_CAP),
         made: 0,

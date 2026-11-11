@@ -4,11 +4,13 @@
 #include "fm1_rack.h"
 #include "PanelAnchors.hpp"
 #include <osdialog.h>
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <vector>
 
 using namespace firmware_host;
 
@@ -27,9 +29,13 @@ struct FM1Host : Module {
     int oldCc = -1, oldCcNumber = -1, oldCcChannel = -1;
     // Only UI/serialization takes this mutex; process() never does.
     std::mutex metadataMutex;
-    std::string firmwareHash, stateId;
+    std::string firmwareHash;
     std::string expectedHash;
-    std::string pendingPreviousId;
+    const std::string cacheRoot = asset::user("Eidolon");
+    // A load in flight: status is adopted once the runtime's generation moves past this (a
+    // session may report the very state it was loaded from, or none when booted fresh).
+    uint64_t pendingGeneration = 0;
+    bool awaitingLoad = false;
     bool pendingUnload = false;
     uint64_t dspGeneration = 0;
     MidiRecovery recovery;
@@ -48,18 +54,52 @@ struct FM1Host : Module {
         configInput(RESET, "Restart transport (MIDI Stop, position zero, Start)");
         configOutput(LEFT, "Left audio (+/-5 V nominal)");
         configOutput(RIGHT, "Right audio (+/-5 V nominal)");
-        const std::string root = asset::user("Eidolon");
-        if (fm1_abi_version() == FM1_ABI_VERSION) runtime = fm1_create(root.c_str());
+        if (fm1_abi_version() == FM1_ABI_VERSION) runtime = fm1_create(cacheRoot.c_str());
     }
     ~FM1Host() override { if (runtime) fm1_destroy(runtime); }
 
     void importFirmware(const std::string& path) {
         if (runtime) {
+            const uint64_t generation = fm1_generation(runtime);
             if (fm1_load_path(runtime, path.c_str())) {
                 std::lock_guard<std::mutex> guard(metadataMutex);
-                expectedHash.clear(); pendingPreviousId.clear(); pendingUnload = false;
+                expectedHash.clear(); pendingUnload = false;
+                awaitingLoad = true; pendingGeneration = generation;
             }
         }
+    }
+    // A firmware from the local cache, booted fresh: the package's own flash, no saved state.
+    void loadCachedFirmware(const std::string& sha) {
+        if (!runtime) return;
+        {
+            std::lock_guard<std::mutex> guard(metadataMutex);
+            expectedHash = sha; pendingUnload = false;
+            awaitingLoad = true; pendingGeneration = fm1_generation(runtime);
+        }
+        fm1_load_cached(runtime, sha.c_str(), "");
+    }
+    struct CachedFirmware { std::string sha, name, identity; };
+    // firmware/<sha256>.fwsc with its .json (written by the runtime on each load); a package
+    // cached before the .json existed is listed by its hash until it is next loaded.
+    std::vector<CachedFirmware> cachedFirmware() const {
+        std::vector<CachedFirmware> list;
+        for (const std::string& path : system::getEntries(system::join(cacheRoot, "firmware"))) {
+            if (system::getExtension(path) != ".fwsc") continue;
+            CachedFirmware f;
+            f.sha = system::getStem(path);
+            if (!isDigest(f.sha)) continue;
+            f.name = f.sha.substr(0, 12);
+            if (json_t* meta = json_load_file(system::join(cacheRoot, "firmware", f.sha + ".json").c_str(), 0, nullptr)) {
+                if (const char* v = json_string_value(json_object_get(meta, "name"))) f.name = v;
+                if (const char* v = json_string_value(json_object_get(meta, "identity"))) f.identity = v;
+                json_decref(meta);
+            }
+            list.push_back(f);
+        }
+        std::sort(list.begin(), list.end(), [](const CachedFirmware& a, const CachedFirmware& b) {
+            return string::lowercase(a.name) < string::lowercase(b.name);
+        });
+        return list;
     }
     void chooseFirmware() {
         osdialog_filters* filters = osdialog_filters_parse("FM-1 firmware:fwsc");
@@ -69,17 +109,16 @@ struct FM1Host : Module {
     }
     void unloadFirmware() {
         if (runtime) fm1_unload(runtime);
-        { std::lock_guard<std::mutex> guard(metadataMutex); firmwareHash.clear(); stateId.clear(); expectedHash.clear(); pendingPreviousId.clear(); pendingUnload = true; }
+        { std::lock_guard<std::mutex> guard(metadataMutex); firmwareHash.clear(); expectedHash.clear(); awaitingLoad = false; pendingUnload = true; }
     }
     bool readStatus(Fm1Status& status) {
         if (!runtime || !fm1_try_get_status(runtime, &status)) return false;
         std::string sha(status.firmware_sha256);
-        std::string id(status.state_id);
-        if (isDigest(sha) && isStateId(id)) {
+        if (isDigest(sha)) {
             std::lock_guard<std::mutex> guard(metadataMutex);
             if (!pendingUnload && (expectedHash.empty() || expectedHash == sha) &&
-                (pendingPreviousId.empty() || pendingPreviousId != id)) {
-                firmwareHash = sha; stateId = id; expectedHash.clear(); pendingPreviousId.clear();
+                (!awaitingLoad || status.generation != pendingGeneration)) {
+                firmwareHash = sha; expectedHash.clear(); awaitingLoad = false;
             }
         }
         return true;
@@ -99,13 +138,23 @@ struct FM1Host : Module {
         if (runtime) fm1_request_save(runtime);
         Fm1Status snapshot{};
         readStatus(snapshot);
+        // The firmware's own flash writes (presets, settings) as sectors that differ from the
+        // package image. The package itself never enters the patch: loading needs it locally.
+        std::vector<uint8_t> delta;
+        if (runtime) {
+            delta.resize(fm1_copy_flash_delta(runtime, nullptr, 0));
+            if (!delta.empty() && fm1_copy_flash_delta(runtime, delta.data(), delta.size()) != delta.size()) delta.clear();
+        }
         std::lock_guard<std::mutex> guard(metadataMutex);
         json_t* root = json_object();
-        json_object_set_new(root, "schema", json_integer(1));
-        // Whitelist deliberately excludes firmware paths, package bytes, flash,
-        // resource data and even changed-sector deltas. Local state only.
-        if (isDigest(firmwareHash)) json_object_set_new(root, "firmwareSha256", json_string(firmwareHash.c_str()));
-        if (isStateId(stateId)) json_object_set_new(root, "stateId", json_string(stateId.c_str()));
+        json_object_set_new(root, "schema", json_integer(2));
+        // Whitelist: no firmware paths or package bytes. flashDelta only for the firmware it
+        // was made for (bytes 12..76 of the delta hold that firmware's hash).
+        if (isDigest(firmwareHash)) {
+            json_object_set_new(root, "firmwareSha256", json_string(firmwareHash.c_str()));
+            if (delta.size() > 76 && std::string(delta.begin() + 12, delta.begin() + 76) == firmwareHash)
+                json_object_set_new(root, "flashDelta", json_string(string::toBase64(delta).c_str()));
+        }
         json_object_set_new(root, "clockMhz", json_integer(clockMhz.load()));
         json_object_set_new(root, "leadFrames", json_integer(leadFrames.load()));
         return root;
@@ -113,21 +162,22 @@ struct FM1Host : Module {
     void dataFromJson(json_t* root) override {
         if (!json_is_object(root)) return;
         json_t* schema = json_object_get(root, "schema");
-        if (schema && (!json_is_integer(schema) || json_integer_value(schema) != 1)) return;
+        const json_int_t version = schema && json_is_integer(schema) ? json_integer_value(schema) : 1;
+        if (schema && (!json_is_integer(schema) || version < 1 || version > 2)) return;
         auto getString = [&](const char* key) {
             const char* value = json_string_value(json_object_get(root, key));
             return value ? std::string(value) : std::string();
         };
         std::string sha = getString("firmwareSha256");
-        std::string id = getString("stateId");
+        std::string id = getString("stateId");  // schema 1: a legacy local state file
         if (!isDigest(sha)) sha.clear();
         if (!isStateId(id)) id.clear();
-        Fm1Status before{};
-        if (runtime) fm1_try_get_status(runtime, &before);
+        std::vector<uint8_t> delta;
+        if (version >= 2) delta = string::fromBase64(getString("flashDelta"));
         {
             std::lock_guard<std::mutex> guard(metadataMutex);
-            firmwareHash = sha; stateId = id; expectedHash = sha; pendingUnload = sha.empty();
-            pendingPreviousId = before.state_id;
+            firmwareHash = sha; expectedHash = sha; pendingUnload = sha.empty();
+            awaitingLoad = !sha.empty(); pendingGeneration = runtime ? fm1_generation(runtime) : 0;
         }
         unsigned clock = 240, lead = 1024;
         auto c = json_integer_value(json_object_get(root, "clockMhz"));
@@ -136,8 +186,9 @@ struct FM1Host : Module {
         if (l >= 256 && l <= 4096) lead = static_cast<unsigned>(l);
         setOptions(clock, lead);
         if (runtime) {
-            if (!sha.empty()) fm1_load_cached(runtime, sha.c_str(), id.c_str());
-            else fm1_unload(runtime);
+            if (sha.empty()) fm1_unload(runtime);
+            else if (!delta.empty()) fm1_load_cached_flash(runtime, sha.c_str(), delta.data(), delta.size());
+            else fm1_load_cached(runtime, sha.c_str(), id.c_str());
         }
     }
 
@@ -596,7 +647,20 @@ struct FM1HostWidget : ModuleWidget {
         menu->addChild(new MenuSeparator);
         menu->addChild(createMenuLabel("User-supplied firmware only"));
         menu->addChild(createMenuItem("Import firmware (.fwsc)...", "", [m] { m->chooseFirmware(); }));
-        menu->addChild(createMenuItem("Save local flash now", "", [m] { if (m->runtime) fm1_request_save(m->runtime); }));
+        menu->addChild(createSubmenuItem("Load cached firmware", "", [m](Menu* sub) {
+            const auto list = m->cachedFirmware();
+            if (list.empty()) sub->addChild(createMenuLabel("Nothing imported yet"));
+            std::string current;
+            { std::lock_guard<std::mutex> guard(m->metadataMutex); current = m->firmwareHash; }
+            for (const auto& f : list) {
+                const std::string right = f.identity != f.name ? f.identity : "";
+                const std::string sha = f.sha;
+                sub->addChild(createCheckMenuItem(f.name, right, [current, sha] { return current == sha; },
+                                                  [m, sha] { m->loadCachedFirmware(sha); }));
+            }
+            sub->addChild(new MenuSeparator);
+            sub->addChild(createMenuLabel("Boots fresh: the package's own flash only"));
+        }));
         menu->addChild(createMenuItem("Reboot current firmware", "", [m] { if (m->runtime) fm1_reset(m->runtime); }));
         menu->addChild(createMenuItem("Unload firmware", "", [m] { m->unloadFirmware(); }));
         menu->addChild(createMenuItem("All notes off", "", [m] { m->panicRequested.store(true); }));
@@ -617,7 +681,7 @@ struct FM1HostWidget : ModuleWidget {
                 sub->addChild(createCheckMenuItem(string::f("%.1f ms (%u frames)", frames / 44.1, frames), "", [m, frames] { return m->leadFrames.load() == frames; }, [m, frames] { m->setOptions(m->clockMhz.load(), frames); }));
         }));
         menu->addChild(createMenuLabel("Buttons: left-click holds, right-click latches"));
-        menu->addChild(createMenuLabel("Patches never embed firmware or flash data"));
+        menu->addChild(createMenuLabel("Patches keep flash changes, never the firmware"));
     }
 };
 

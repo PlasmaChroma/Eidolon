@@ -57,21 +57,21 @@ from Rack's per-sample callback as a shortcut.
 ## Local content model
 
 The import limit is 16 MiB. A package is parsed/validated before it is accepted
-into the local content-addressed cache. Cached imports recheck SHA-256. Local
-state binds a firmware digest to a fixed-size flash image and checksum.
-State IDs are validated hex, never filesystem paths. Writes use a temporary
-file and replacement within the same local store.
+into the local content-addressed cache. Cached imports recheck SHA-256.
 
-Only identity/options cross Rack's patch serializer. Flash differences are
-not an exception: firmware can write program/resource data to flash, so even
-delta snapshots remain private local content. Do not add `.fm1save` or a
-portable "include firmware" export without a separate explicit product and
-licensing decision.
+Firmware flash state lives in the patch: identity, options and a flash delta
+cross Rack's patch serializer. The delta (`store::encode_delta`, FM1RFL02) holds
+the 4 KiB sectors that differ from the package's own flash image, with SHA-256
+of that base and of the rebuilt flash; a delta over a different base is refused
+and the package boots fresh. The worker refreshes an in-memory delta when flash
+writes settle (skipping writes that leave flash unchanged); `dataToJson` copies
+it. The package bytes and their path never enter a patch. This is a deliberate
+product decision: firmware decides what it writes to flash, so data a firmware
+copies there travels with shared patches.
 
-Each cached restore forks a new local session. Current session files are
-mutable. Future exact Rack Save should use immutable content-addressed
-checkpoints with a save-completion protocol and surface failures. Do not
-block the real-time callback on fsync; stage snapshots to a separate writer.
+Schema-1 patches referenced a local state file; those still load (read-only),
+and the store writes no state files any more. Do not add a portable "include
+firmware" export without a separate explicit product and licensing decision.
 
 ## Next milestones, in order
 

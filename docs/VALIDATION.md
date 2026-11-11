@@ -73,9 +73,9 @@ provenance or a security audit of arbitrary guest code.
 
 ## Known first-pass limitations
 
-1. Local flash files are mutable device-state records, not immutable snapshots
-   of each Rack Save. Volatile RAM is not persisted. An earlier patch can
-   reference a session whose contents have since changed.
+1. Each patch save embeds the flash as it was after the firmware's last settled
+   write (a write in the last ~250 ms before saving may be missed). Volatile
+   RAM is not persisted.
 2. Stock update packages may omit a preset/user bank. Automatic default-bank
    injection is intentionally disabled; a user SysEx/bank importer is not yet
    implemented. Missing content may leave a booted device silent.

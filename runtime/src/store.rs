@@ -11,6 +11,13 @@ use std::{
 pub const MAX_PACKAGE: usize = 16 * 1024 * 1024;
 const FLASH_SIZE: usize = 1 << 20;
 const HEADER: usize = 8 + 4 + 64 + 32;
+/// FM1RFL02 (a flash delta): only the 4 KiB sectors that differ from the package's own flash
+/// image (the base the machine boots from), rebuilt on load. Embedded in Rack patches; older
+/// local state files use it too. magic, flash size, firmware hash (hex), base
+/// SHA-256, rebuilt-flash SHA-256, sector size, sector count, then (offset, sector) pairs.
+const SECTOR: usize = 4096;
+const HEADER2: usize = 8 + 4 + 64 + 32 + 32 + 4 + 4;
+pub const MAX_DELTA: usize = HEADER2 + (FLASH_SIZE / SECTOR) * (4 + SECTOR);
 static SERIAL: AtomicU64 = AtomicU64::new(0);
 pub fn valid_id(s: &str) -> bool {
     s.len() == 64
@@ -89,6 +96,29 @@ impl Store {
         }
         atomic_write(&p, data)
     }
+    /// `firmware/<hash>.json` beside the cached package, for the plugin's "Load cached firmware"
+    /// menu: the file name it was imported from (`name`, given on an import from a path) and the
+    /// package's identity. Without a name, a missing file is created with the identity as the
+    /// name (packages cached before this existed) and an existing one is left alone.
+    pub fn write_meta(&self, hash: &str, name: Option<&str>, identity: &str) -> Result<(), String> {
+        if !valid_id(hash) {
+            return Err("Invalid firmware identifier".into());
+        }
+        let p = self.root.join("firmware").join(format!("{hash}.json"));
+        if name.is_none() && p.exists() {
+            return Ok(());
+        }
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let text = format!(
+            "{{\n  \"schema\": 1,\n  \"name\": {},\n  \"identity\": {},\n  \"imported\": {now}\n}}\n",
+            json_string(name.unwrap_or(identity)),
+            json_string(identity)
+        );
+        atomic_write(&p, text.as_bytes())
+    }
     fn state_path(&self, hash: &str, id: &str) -> Result<PathBuf, String> {
         if !valid_id(hash) || !valid_id(id) {
             return Err("Invalid local state reference".into());
@@ -99,41 +129,110 @@ impl Store {
             .join(hash)
             .join(format!("{id}.flash")))
     }
-    pub fn read_state(&self, hash: &str, id: &str) -> Result<Vec<u8>, String> {
-        let data =
-            read_bounded(&self.state_path(hash, id)?, HEADER + FLASH_SIZE).map_err(|_| {
+    /// A saved flash state, whole: FM1RFL01 (the whole flash) or FM1RFL02 (sectors over `base`,
+    /// the package's own flash image; a state saved over a different base is refused rather
+    /// than rebuilt wrong).
+    pub fn read_state(&self, hash: &str, id: &str, base: &[u8]) -> Result<Vec<u8>, String> {
+        let data = read_bounded(&self.state_path(hash, id)?, MAX_DELTA.max(HEADER + FLASH_SIZE))
+            .map_err(|_| {
                 "Referenced local flash state is missing; firmware alone cannot restore saved edits"
                     .to_owned()
             })?;
-        if data.len() != HEADER + FLASH_SIZE
-            || &data[..8] != b"FM1RFL01"
+        let invalid = || "Local flash state header is invalid".to_owned();
+        if data.len() < 76
             || u32::from_le_bytes(data[8..12].try_into().unwrap()) as usize != FLASH_SIZE
             || &data[12..76] != hash.as_bytes()
         {
-            return Err("Local flash state header is invalid".into());
+            return Err(invalid());
         }
-        if sha256::digest(&data[HEADER..]) != data[76..108] {
-            return Err("Local flash state checksum mismatch".into());
+        match &data[..8] {
+            b"FM1RFL01" => {
+                if data.len() != HEADER + FLASH_SIZE {
+                    return Err(invalid());
+                }
+                if sha256::digest(&data[HEADER..]) != data[76..108] {
+                    return Err("Local flash state checksum mismatch".into());
+                }
+                Ok(data[HEADER..].to_vec())
+            }
+            b"FM1RFL02" => decode_delta(hash, &data, base),
+            _ => Err(invalid()),
         }
-        Ok(data[HEADER..].to_vec())
-    }
-    pub fn save_state(&self, hash: &str, id: &str, flash: &[u8]) -> Result<(), String> {
-        if flash.len() != FLASH_SIZE {
-            return Err("Unexpected flash size".into());
-        }
-        let p = self.state_path(hash, id)?;
-        fs::create_dir_all(p.parent().unwrap()).map_err(|e| e.to_string())?;
-        let mut data = Vec::with_capacity(HEADER + FLASH_SIZE);
-        data.extend_from_slice(b"FM1RFL01");
-        data.extend_from_slice(&(FLASH_SIZE as u32).to_le_bytes());
-        data.extend_from_slice(hash.as_bytes());
-        data.extend_from_slice(&sha256::digest(flash));
-        data.extend_from_slice(flash);
-        atomic_write(&p, &data)
     }
 }
+/// `flash` as FM1RFL02: the sectors that differ from `base`.
+pub fn encode_delta(hash: &str, flash: &[u8], base: &[u8]) -> Result<Vec<u8>, String> {
+    if !valid_id(hash) || flash.len() != FLASH_SIZE || base.len() != FLASH_SIZE {
+        return Err("Unexpected flash state".into());
+    }
+    let changed: Vec<usize> = (0..FLASH_SIZE / SECTOR)
+        .map(|s| s * SECTOR)
+        .filter(|&o| flash[o..o + SECTOR] != base[o..o + SECTOR])
+        .collect();
+    let mut data = Vec::with_capacity(HEADER2 + changed.len() * (4 + SECTOR));
+    data.extend_from_slice(b"FM1RFL02");
+    data.extend_from_slice(&(FLASH_SIZE as u32).to_le_bytes());
+    data.extend_from_slice(hash.as_bytes());
+    data.extend_from_slice(&sha256::digest(base));
+    data.extend_from_slice(&sha256::digest(flash));
+    data.extend_from_slice(&(SECTOR as u32).to_le_bytes());
+    data.extend_from_slice(&(changed.len() as u32).to_le_bytes());
+    for o in changed {
+        data.extend_from_slice(&(o as u32).to_le_bytes());
+        data.extend_from_slice(&flash[o..o + SECTOR]);
+    }
+    Ok(data)
+}
+/// The whole flash from an FM1RFL02 delta over `base`, checked: for this firmware, over this
+/// base (a delta saved over another image is refused rather than rebuilt wrong), intact.
+pub fn decode_delta(hash: &str, data: &[u8], base: &[u8]) -> Result<Vec<u8>, String> {
+    let invalid = || "Flash state header is invalid".to_owned();
+    if data.len() < HEADER2
+        || &data[..8] != b"FM1RFL02"
+        || u32::from_le_bytes(data[8..12].try_into().unwrap()) as usize != FLASH_SIZE
+        || &data[12..76] != hash.as_bytes()
+        || base.len() != FLASH_SIZE
+    {
+        return Err(invalid());
+    }
+    if sha256::digest(base) != data[76..108] {
+        return Err("Flash state was saved over a different package image".into());
+    }
+    let word = |at: usize| u32::from_le_bytes(data[at..at + 4].try_into().unwrap()) as usize;
+    let (size, count) = (word(140), word(144));
+    if size != SECTOR || count > FLASH_SIZE / SECTOR || data.len() != HEADER2 + count * (4 + SECTOR) {
+        return Err(invalid());
+    }
+    let mut flash = base.to_vec();
+    for i in 0..count {
+        let at = HEADER2 + i * (4 + SECTOR);
+        let off = word(at);
+        if off % SECTOR != 0 || off + SECTOR > FLASH_SIZE {
+            return Err(invalid());
+        }
+        flash[off..off + SECTOR].copy_from_slice(&data[at + 4..at + 4 + SECTOR]);
+    }
+    if sha256::digest(&flash) != data[108..140] {
+        return Err("Flash state checksum mismatch".into());
+    }
+    Ok(flash)
+}
+fn json_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let temp = path.with_extension(format!("{}.tmp", session_id()));
+    let temp = path.with_extension(format!("{}.tmp", &session_id()[..16]));
     let result = (|| {
         let mut f = fs::OpenOptions::new()
             .write(true)
@@ -181,29 +280,56 @@ mod tests {
         }
     }
     #[test]
-    fn roundtrip_integrity_and_fork_ids() {
-        let dir = std::env::temp_dir().join(format!("fm1-rack-test-{}", session_id()));
-        let s = Store::new(dir.clone()).unwrap();
+    fn delta_roundtrip_and_integrity() {
         let hash = "a".repeat(64);
+        let base = vec![0xffu8; FLASH_SIZE];
+        let mut flash = base.clone();
+        flash[5 * SECTOR + 7] = 0x5a;
+        flash[FLASH_SIZE - 1] = 0x01;
+        let d = encode_delta(&hash, &flash, &base).unwrap();
+        assert_eq!(d.len(), HEADER2 + 2 * (4 + SECTOR));
+        assert_eq!(decode_delta(&hash, &d, &base).unwrap(), flash);
+        let empty = encode_delta(&hash, &base, &base).unwrap();
+        assert_eq!(empty.len(), HEADER2);
+        assert_eq!(decode_delta(&hash, &empty, &base).unwrap(), base);
+        assert!(decode_delta(&"b".repeat(64), &d, &base).is_err());
+        // a different base is refused, not rebuilt wrong
+        assert!(decode_delta(&hash, &d, &vec![0u8; FLASH_SIZE]).is_err());
+        let mut corrupt = d.clone();
+        let last = corrupt.len() - 1;
+        corrupt[last] ^= 1;
+        assert!(decode_delta(&hash, &corrupt, &base).is_err());
+        assert!(decode_delta(&hash, &d[..d.len() - 1], &base).is_err());
+        // a legacy local state file in the same format still reads
+        let dir = std::env::temp_dir().join(format!("fm1-rack-test-{}", &session_id()[..16]));
+        let s = Store::new(dir.clone()).unwrap();
         let id = session_id();
-        let data = vec![0x5a; FLASH_SIZE];
-        s.save_state(&hash, &id, &data).unwrap();
-        assert_eq!(s.read_state(&hash, &id).unwrap(), data);
-        let data2 = vec![0xa5; FLASH_SIZE];
-        s.save_state(&hash, &id, &data2).unwrap();
-        assert_eq!(s.read_state(&hash, &id).unwrap(), data2);
-        assert_ne!(id, session_id());
-        assert!(s.read_state(&"b".repeat(64), &id).is_err());
         let p = s.state_path(&hash, &id).unwrap();
-        let mut corrupt = fs::read(&p).unwrap();
-        corrupt[HEADER + 19] ^= 1;
-        fs::write(&p, corrupt).unwrap();
-        assert!(s.read_state(&hash, &id).is_err());
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(&p, &d).unwrap();
+        assert_eq!(s.read_state(&hash, &id, &base).unwrap(), flash);
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn reads_whole_flash_format() {
+        let dir = std::env::temp_dir().join(format!("fm1-rack-v1-{}", &session_id()[..16]));
+        let s = Store::new(dir.clone()).unwrap();
+        let (hash, id) = ("c".repeat(64), session_id());
+        let flash = vec![0x33u8; FLASH_SIZE];
+        let p = s.state_path(&hash, &id).unwrap();
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        let mut data = b"FM1RFL01".to_vec();
+        data.extend_from_slice(&(FLASH_SIZE as u32).to_le_bytes());
+        data.extend_from_slice(hash.as_bytes());
+        data.extend_from_slice(&sha256::digest(&flash));
+        data.extend_from_slice(&flash);
+        fs::write(&p, data).unwrap();
+        assert_eq!(s.read_state(&hash, &id, &[]).unwrap(), flash);
         fs::remove_dir_all(dir).unwrap();
     }
     #[test]
     fn oversized_package_rejected_before_read() {
-        let dir = std::env::temp_dir().join(format!("fm1-rack-size-{}", session_id()));
+        let dir = std::env::temp_dir().join(format!("fm1-rack-size-{}", &session_id()[..16]));
         let s = Store::new(dir.clone()).unwrap();
         let p = dir.join("synthetic-oversize.dat");
         let f = fs::File::create(&p).unwrap();
