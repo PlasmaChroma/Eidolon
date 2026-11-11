@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Eidolon FM1Host panel layout. User units are Rack panel pixels.
+     Elements in "component_anchors" are read at runtime by src/PanelAnchors.cpp;
+     move or resize them to change the layout. Ids are looked up by name. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="340.360mm" height="128.5mm" viewBox="0 0 1005 380" version="1.1" id="fm1host-panel">
+  <rect x="0" y="0" width="1005" height="380" fill="#3a3c40"/>
+  <g id="component_anchors" fill="#ff00ff" fill-opacity="0.35" stroke="#ff00ff" stroke-width="0.5">
+      <rect id="BODY" x="4" y="6" width="997" height="368"/>
+      <rect id="SCREEN" x="11" y="10" width="360" height="360"/>
+      <circle id="MASTER" cx="409" cy="62" r="10"/>
+      <circle id="ENC_SELECT" cx="459" cy="62" r="16"/>
+      <circle id="ENC_PRESETS" cx="409" cy="126" r="16"/>
+      <circle id="ENC_ALGORITHM" cx="459" cy="126" r="16"/>
+      <circle id="ENC_KNOB1" cx="521" cy="62" r="16"/>
+      <circle id="ENC_KNOB2" cx="588" cy="62" r="16"/>
+      <circle id="ENC_KNOB3" cx="655" cy="62" r="16"/>
+      <circle id="ENC_KNOB4" cx="722" cy="62" r="16"/>
+      <rect id="WELL_OCT" x="386" y="162" width="96" height="35"/>
+      <rect id="WELL_FUNC" x="492" y="104" width="257" height="90"/>
+      <rect id="BTN_OCT_DOWN" x="391" y="168" width="40" height="23"/>
+      <rect id="BTN_OCT_UP" x="437" y="168" width="40" height="23"/>
+      <rect id="BTN_FX" x="503" y="113" width="35" height="32"/>
+      <rect id="BTN_SEL" x="543.3" y="113" width="35" height="32"/>
+      <rect id="BTN_ENV" x="583.6" y="113" width="35" height="32"/>
+      <rect id="BTN_LFO" x="623.9" y="113" width="35" height="32"/>
+      <rect id="BTN_EDIT" x="664.2" y="113" width="35" height="32"/>
+      <rect id="BTN_GLO" x="704.5" y="113" width="35" height="32"/>
+      <rect id="BTN_HOME" x="503" y="153" width="35" height="32"/>
+      <rect id="BTN_SAVE" x="543.3" y="153" width="35" height="32"/>
+      <rect id="BTN_ARP" x="583.6" y="153" width="35" height="32"/>
+      <rect id="BTN_SEQ" x="623.9" y="153" width="35" height="32"/>
+      <rect id="BTN_PLAY" x="664.2" y="153" width="35" height="32"/>
+      <rect id="BTN_REC" x="704.5" y="153" width="35" height="32"/>
+      <rect id="KEYBED" x="386" y="258" width="598" height="112"/>
+      <rect id="KEY_14" x="400" y="314" width="30" height="48"/>
+      <rect id="KEY_15" x="419.1" y="267" width="28" height="42"/>
+      <rect id="KEY_16" x="436.2" y="314" width="30" height="48"/>
+      <rect id="KEY_17" x="455.3" y="267" width="28" height="42"/>
+      <rect id="KEY_18" x="472.4" y="314" width="30" height="48"/>
+      <rect id="KEY_19" x="491.5" y="267" width="28" height="42"/>
+      <rect id="KEY_20" x="508.6" y="314" width="30" height="48"/>
+      <rect id="KEY_21" x="544.8" y="314" width="30" height="48"/>
+      <rect id="KEY_22" x="563.9" y="267" width="28" height="42"/>
+      <rect id="KEY_23" x="581" y="314" width="30" height="48"/>
+      <rect id="KEY_24" x="600.1" y="267" width="28" height="42"/>
+      <rect id="KEY_25" x="617.2" y="314" width="30" height="48"/>
+      <rect id="KEY_26" x="653.4" y="314" width="30" height="48"/>
+      <rect id="KEY_27" x="672.5" y="267" width="28" height="42"/>
+      <rect id="KEY_28" x="689.6" y="314" width="30" height="48"/>
+      <rect id="KEY_29" x="708.7" y="267" width="28" height="42"/>
+      <rect id="KEY_30" x="725.8" y="314" width="30" height="48"/>
+      <rect id="KEY_31" x="744.9" y="267" width="28" height="42"/>
+      <rect id="KEY_32" x="762" y="314" width="30" height="48"/>
+      <rect id="KEY_33" x="798.2" y="314" width="30" height="48"/>
+      <rect id="KEY_34" x="817.3" y="267" width="28" height="42"/>
+      <rect id="KEY_35" x="834.4" y="314" width="30" height="48"/>
+      <rect id="KEY_36" x="853.5" y="267" width="28" height="42"/>
+      <rect id="KEY_37" x="870.6" y="314" width="30" height="48"/>
+      <rect id="KEY_38" x="906.8" y="314" width="30" height="48"/>
+      <rect id="KEY_39" x="925.9" y="267" width="28" height="42"/>
+      <rect id="KEY_40" x="943" y="314" width="30" height="48"/>
+      <circle id="JACK_VOCT" cx="838" cy="30" r="10"/>
+      <circle id="JACK_GATE" cx="838" cy="75" r="10"/>
+      <circle id="JACK_VEL" cx="838" cy="120" r="10"/>
+      <circle id="JACK_CC" cx="838" cy="165" r="10"/>
+      <circle id="JACK_CLK" cx="838" cy="210" r="10"/>
+      <circle id="JACK_RUN" cx="908" cy="30" r="10"/>
+      <circle id="JACK_RESET" cx="908" cy="75" r="10"/>
+      <circle id="JACK_L" cx="908" cy="165" r="10"/>
+      <circle id="JACK_R" cx="908" cy="210" r="10"/>
+      <rect id="WELL_OUT" x="888" y="138" width="40" height="87"/>
+  </g>
+</svg>

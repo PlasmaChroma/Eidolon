@@ -17,7 +17,7 @@ FLAGS += -Iinclude
 EXTRA_CXXFLAGS += -std=c++17
 # CV guards rely on IEEE NaN/Inf checks remaining meaningful.
 EXTRA_FLAGS += -fno-unsafe-math-optimizations
-DISTRIBUTABLES += LICENSE THIRD_PARTY.md README.md docs licenses
+DISTRIBUTABLES += res LICENSE THIRD_PARTY.md README.md docs licenses
 
 include $(RACK_DIR)/plugin.mk
 
