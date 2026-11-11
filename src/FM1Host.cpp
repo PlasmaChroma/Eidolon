@@ -336,7 +336,7 @@ struct HostPanel : Widget {
         panel_anchors::Anchors a;
         const std::string path = asset::plugin(pluginInstance, "res/FM1Host.svg");
         if (!a.load(path)) WARN("Eidolon panel: could not read anchors from %s", path.c_str());
-        box.size = Vec(a.width > 0 ? a.width : 67 * RACK_GRID_WIDTH, RACK_GRID_HEIGHT);
+        box.size = Vec(a.width > 0 ? a.width : 63 * RACK_GRID_WIDTH, RACK_GRID_HEIGHT);
         body = anchorRect(a, "BODY");
         screen = anchorRect(a, "SCREEN");
         octWell = anchorRect(a, "WELL_OCT");

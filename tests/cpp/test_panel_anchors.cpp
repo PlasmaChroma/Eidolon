@@ -43,7 +43,7 @@ int main() {
     {  // The shipped panel defines every anchor the widget reads.
         Anchors a;
         CHECK(a.load("res/FM1Host.svg"));
-        CHECK(approx(a.width, 67 * 15) && approx(a.height, 380));
+        CHECK(approx(a.width, 63 * 15) && approx(a.height, 380));
         const char* ids[] = {"BODY", "SCREEN", "WELL_OCT", "WELL_FUNC", "KEYBED", "WELL_OUT", "MASTER",
                              "ENC_SELECT", "ENC_PRESETS", "ENC_ALGORITHM", "ENC_KNOB1", "ENC_KNOB2", "ENC_KNOB3", "ENC_KNOB4",
                              "BTN_OCT_DOWN", "BTN_OCT_UP", "BTN_FX", "BTN_SEL", "BTN_ENV", "BTN_LFO", "BTN_EDIT", "BTN_GLO",
