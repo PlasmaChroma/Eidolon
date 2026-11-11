@@ -23,7 +23,7 @@ include $(RACK_DIR)/plugin.mk
 
 ABI_TEST_LIBS := -lpthread -ldl -lm
 ifdef ARCH_WIN
-ABI_TEST_LIBS := -luserenv -lws2_32 -lbcrypt -lntdll -ladvapi32
+ABI_TEST_LIBS := -luserenv -lws2_32 -lbcrypt -lntdll -ladvapi32 -lwinmm -lavrt
 endif
 ifdef ARCH_MAC
 ABI_TEST_LIBS := -lpthread -lm -liconv -framework Security
@@ -36,7 +36,7 @@ ifdef ARCH_MAC
 LDFLAGS += -liconv -framework Security
 endif
 ifdef ARCH_WIN
-LDFLAGS += -luserenv -lws2_32 -lbcrypt -lntdll -ladvapi32
+LDFLAGS += -luserenv -lws2_32 -lbcrypt -lntdll -ladvapi32 -lwinmm -lavrt
 endif
 
 $(RUST_LIB): $(RUST_SOURCES) vendor/fm1-emu/Cargo.toml

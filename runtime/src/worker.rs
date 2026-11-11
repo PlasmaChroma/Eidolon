@@ -458,7 +458,50 @@ impl Worker {
         self.saver.finish();
     }
 }
+/// The machine thread keeps a small audio lead, so it must wake on time and not be preempted
+/// for long. While the worker lives on Windows: 1 ms timer resolution (a plain thread's short
+/// sleeps can otherwise end on the 15.6 ms scheduler tick), and the thread joins the multimedia
+/// class "Pro Audio" (MMCSS), as audio threads do.
+#[cfg(windows)]
+struct Realtime(isize);
+#[cfg(windows)]
+mod realtime_ffi {
+    #[link(name = "winmm")]
+    extern "system" {
+        pub fn timeBeginPeriod(ms: u32) -> u32;
+        pub fn timeEndPeriod(ms: u32) -> u32;
+    }
+    #[link(name = "avrt")]
+    extern "system" {
+        pub fn AvSetMmThreadCharacteristicsW(task: *const u16, index: *mut u32) -> isize;
+        pub fn AvRevertMmThreadCharacteristics(handle: isize) -> i32;
+    }
+}
+#[cfg(windows)]
+impl Realtime {
+    fn enter() -> Self {
+        let task: Vec<u16> = "Pro Audio".encode_utf16().chain(Some(0)).collect();
+        let mut index = 0u32;
+        unsafe {
+            realtime_ffi::timeBeginPeriod(1);
+            Realtime(realtime_ffi::AvSetMmThreadCharacteristicsW(task.as_ptr(), &mut index))
+        }
+    }
+}
+#[cfg(windows)]
+impl Drop for Realtime {
+    fn drop(&mut self) {
+        unsafe {
+            if self.0 != 0 {
+                realtime_ffi::AvRevertMmThreadCharacteristics(self.0);
+            }
+            realtime_ffi::timeEndPeriod(1);
+        }
+    }
+}
 pub fn run(shared: Arc<Shared>, commands: Receiver<Command>, store: Store) {
+    #[cfg(windows)]
+    let _realtime = Realtime::enter();
     let saver = Saver::new(shared.clone(), store.clone());
     let mut w = Worker {
         shared,
