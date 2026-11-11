@@ -83,9 +83,16 @@ struct Worker {
     speed_at: Instant,
     speed_ms: u64,
     busy: Duration,
+    // Rack takes audio in bursts: a device period's worth at once (342 native frames measured
+    // with WASAPI shared mode at 48 kHz; more with bigger periods). Largest frames taken between
+    // two ticks, over the current and the previous 2 s window. The buffer is kept at the lead
+    // plus this, so the lead is headroom after a burst, not swallowed by one.
+    burst: [u64; 2],
+    burst_at: Instant,
+    seen_consumed: u64,
 }
-fn cycle_budget(elapsed_frames: u64, lead: u32, hz: u64) -> u64 {
-    ((elapsed_frames.saturating_add(lead as u64) as u128 * hz as u128 / 44100)
+fn cycle_budget(elapsed_frames: u64, lead: u64, hz: u64) -> u64 {
+    ((elapsed_frames.saturating_add(lead) as u128 * hz as u128 / 44100)
         .min(u64::MAX as u128)) as u64
 }
 impl Worker {
@@ -321,7 +328,17 @@ impl Worker {
             });
         }
         let lead = self.shared.lead.load(Ordering::Relaxed);
-        let need_audio = self.shared.audio.len() < (lead as usize);
+        let consumed = self.shared.consumed.load(Ordering::Acquire);
+        if self.shared.primed.load(Ordering::Relaxed) {
+            self.burst[0] = self.burst[0].max(consumed.saturating_sub(self.seen_consumed));
+        }
+        self.seen_consumed = consumed;
+        if self.burst_at.elapsed() >= Duration::from_secs(2) {
+            self.burst = [0, self.burst[0]];
+            self.burst_at = Instant::now();
+        }
+        let target = lead as u64 + self.burst[0].max(self.burst[1]).min(AUDIO_CAP as u64 / 2);
+        let need_audio = (self.shared.audio.len() as u64) < target;
         // Audio backpressure alone is insufficient before the DAC starts, or
         // for MIDI/control-only programs. Bound firmware time against Rack's
         // monotonic consumed-frame clock even when no sample is produced.
@@ -337,7 +354,7 @@ impl Worker {
             .periph
             .cycles
             .saturating_sub(self.cycle_origin)
-            < cycle_budget(host_elapsed, lead, a.machine.soc.periph.hz);
+            < cycle_budget(host_elapsed, target, a.machine.soc.periph.hz);
         if need_audio && have_time {
             while self.pending.front().is_some_and(|e| e.at <= self.made) {
                 let e = *self.pending.front().unwrap();
@@ -456,6 +473,9 @@ pub fn run(shared: Arc<Shared>, commands: Receiver<Command>, store: Store) {
         speed_at: Instant::now(),
         speed_ms: 0,
         busy: Duration::ZERO,
+        burst: [0; 2],
+        burst_at: Instant::now(),
+        seen_consumed: 0,
     };
     while !w.shared.quit.load(Ordering::Acquire) {
         for _ in 0..64 {
