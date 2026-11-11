@@ -6,7 +6,7 @@ use crate::{
 use fm1_soc::Action;
 use std::{
     collections::VecDeque,
-    sync::mpsc::Receiver,
+    sync::mpsc::{self, Receiver, Sender},
     thread,
     time::{Duration, Instant},
 };
@@ -25,9 +25,55 @@ struct Active {
     master: u16,
     keys: u64,
 }
+// Flash snapshots are hashed, written and fsynced here, off the machine
+// thread, so a save never stalls emulation. One FIFO thread: writes for the
+// same state land in submission order; a backlog for one state is coalesced.
+struct Saver {
+    tx: Option<Sender<(String, String, Box<[u8]>)>>,
+    thread: Option<thread::JoinHandle<()>>,
+}
+impl Saver {
+    fn new(shared: Arc<Shared>, store: Store) -> Self {
+        let (tx, rx) = mpsc::channel::<(String, String, Box<[u8]>)>();
+        let thread = thread::Builder::new()
+            .name("fm1-rack-save".into())
+            .spawn(move || {
+                while let Ok(first) = rx.recv() {
+                    let mut batch = vec![first];
+                    batch.extend(rx.try_iter());
+                    for (i, (hash, id, flash)) in batch.iter().enumerate() {
+                        if batch[i + 1..].iter().any(|(h, d, _)| h == hash && d == id) {
+                            continue; // superseded by a newer snapshot of the same state
+                        }
+                        if let Err(e) = store.save_state(hash, id, flash) {
+                            if let Ok(mut v) = shared.view.lock() {
+                                put(&mut v.status.message, &format!("Local flash save failed: {e}"));
+                            }
+                        }
+                    }
+                }
+            })
+            .ok();
+        Self { tx: Some(tx), thread }
+    }
+    fn submit(&self, hash: &str, id: &str, flash: &[u8]) -> Result<(), String> {
+        self.tx
+            .as_ref()
+            .and_then(|tx| tx.send((hash.to_owned(), id.to_owned(), flash.into())).ok())
+            .ok_or_else(|| "Local flash saver is not running".to_owned())
+    }
+    /// Writes everything submitted so far, then stops the thread.
+    fn finish(&mut self) {
+        self.tx = None;
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
 struct Worker {
     shared: Arc<Shared>,
     store: Store,
+    saver: Saver,
     active: Option<Active>,
     pending: VecDeque<MidiEvent>,
     made: u64,
@@ -91,8 +137,8 @@ impl Worker {
         }
         a.last_save = Instant::now();
         a.save_requested = false;
-        self.store
-            .save_state(&a.hash, &a.id, &a.machine.soc.flash.mem)?;
+        self.saver
+            .submit(&a.hash, &a.id, &a.machine.soc.flash.mem)?;
         a.dirty = false;
         Ok(())
     }
@@ -391,12 +437,15 @@ impl Worker {
             }
         }
         let _ = self.save_current(false);
+        self.saver.finish();
     }
 }
 pub fn run(shared: Arc<Shared>, commands: Receiver<Command>, store: Store) {
+    let saver = Saver::new(shared.clone(), store.clone());
     let mut w = Worker {
         shared,
         store,
+        saver,
         active: None,
         pending: VecDeque::with_capacity(MIDI_CAP),
         made: 0,

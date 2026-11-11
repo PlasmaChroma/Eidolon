@@ -45,6 +45,7 @@ fn read_bounded(path: &Path, max: usize) -> Result<Vec<u8>, String> {
     }
     Ok(data)
 }
+#[derive(Clone)]
 pub struct Store {
     root: PathBuf,
 }
