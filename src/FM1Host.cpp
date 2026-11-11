@@ -284,6 +284,21 @@ struct HostPanel : Widget {
     bool imageDirty = true;
     unsigned ticks = 0;
     int heldKey = -1, dragEncoder = -1;
+    // Computer keyboard while the pointer is over the panel: the same key contacts as clicking.
+    // Key contacts 14..40 run chromatically from F; laid out like a piano on the US layout:
+    // Z row for the naturals F..A with sharps on the row above, then Q row for B..G with sharps
+    // on the number row (B-C and E-F have none, so 2 and 5 are unused).
+    struct PcKey { int key; const char* label; };
+    static constexpr PcKey PC_KEYS[27] = {
+        {GLFW_KEY_Z, "Z"}, {GLFW_KEY_S, "S"}, {GLFW_KEY_X, "X"}, {GLFW_KEY_D, "D"}, {GLFW_KEY_C, "C"},
+        {GLFW_KEY_F, "F"}, {GLFW_KEY_V, "V"}, {GLFW_KEY_B, "B"}, {GLFW_KEY_H, "H"}, {GLFW_KEY_N, "N"},
+        {GLFW_KEY_J, "J"}, {GLFW_KEY_M, "M"}, {GLFW_KEY_COMMA, ","}, {GLFW_KEY_L, "L"},
+        {GLFW_KEY_PERIOD, "."}, {GLFW_KEY_SEMICOLON, ";"}, {GLFW_KEY_SLASH, "/"},
+        {GLFW_KEY_APOSTROPHE, "'"}, {GLFW_KEY_Q, "Q"}, {GLFW_KEY_W, "W"}, {GLFW_KEY_3, "3"},
+        {GLFW_KEY_E, "E"}, {GLFW_KEY_4, "4"}, {GLFW_KEY_R, "R"}, {GLFW_KEY_T, "T"},
+        {GLFW_KEY_6, "6"}, {GLFW_KEY_Y, "Y"}};
+    std::array<bool, 27> pcHeld{};
+    bool hovered = false;
     // Underrun bursts seen since this firmware generation started (one per status poll that
     // saw the counter move), and when the last one happened.
     uint64_t underrunBase = 0;
@@ -460,7 +475,7 @@ struct HostPanel : Widget {
         rounded(vg, keyBed, 16, nvgRGB(24, 25, 27));
         for (int id = 14; id < 41; ++id) {
             Rect r = keyRect(id);
-            bool active = latch[id] || heldKey == id;
+            bool active = latch[id] || heldKey == id || pcHeld[id - 14];
             float glow = std::min(1.f, std::max(active ? 1.f : 0.f, status.leds[id]));
             cap(vg, r, r.size.x / 2, CAP);
             const bool sharp = keyIsSharp[id - 14];
@@ -472,7 +487,13 @@ struct HostPanel : Widget {
                 nvgFillColor(vg, nvgRGBAf(1, .9f, .7f, .25f * glow)); nvgFill(vg);
             }
             if (sharp && keyLabels[id - 14][0])
-                text(vg, r.getCenter().x, r.pos.y + r.size.y - 11, 6.5f, keyLabels[id - 14]);
+                text(vg, r.getCenter().x, r.pos.y + r.size.y - 6, 6.5f, keyLabels[id - 14]);
+            // Computer-keyboard letter in the middle of the key: white, dimmed unless the pointer
+            // is over the panel (where the keyboard plays it).
+            const Vec c = r.getCenter();
+            nvgBeginPath(vg); nvgCircle(vg, c.x, c.y, 7.f);
+            nvgFillColor(vg, hovered ? nvgRGB(236, 238, 240) : nvgRGB(120, 123, 128)); nvgFill(vg);
+            text(vg, c.x, c.y + .4f, 8.f, PC_KEYS[id - 14].label, nvgRGB(12, 12, 13));
         }
 
         // Jack block: inputs on the left column, RUN/RESET and outputs on the right.
@@ -496,7 +517,11 @@ struct HostPanel : Widget {
         Widget::onButton(e);
     }
     void onDragEnd(const event::DragEnd& e) override {
-        if (heldKey >= 0) { key(heldKey, latch[heldKey]); heldKey = -1; }
+        if (heldKey >= 0) {
+            const bool byKeyboard = heldKey >= 14 && pcHeld[heldKey - 14];
+            key(heldKey, latch[heldKey] || byKeyboard);
+            heldKey = -1;
+        }
         dragEncoder = -1; dragAccum = 0;
         Widget::onDragEnd(e);
     }
@@ -507,6 +532,31 @@ struct HostPanel : Widget {
             if (steps) { turn(dragEncoder, steps); dragAccum -= steps; }
         }
         Widget::onDragMove(e);
+    }
+    void onHoverKey(const event::HoverKey& e) override {
+        if (!(e.mods & (GLFW_MOD_CONTROL | GLFW_MOD_ALT | GLFW_MOD_SUPER))) {
+            for (int s = 0; s < 27; ++s) {
+                if (PC_KEYS[s].key != e.key) continue;
+                const int id = s + 14;
+                if (e.action == GLFW_PRESS && !pcHeld[s]) { pcHeld[s] = true; key(id, true); }
+                else if (e.action == GLFW_RELEASE && pcHeld[s]) { pcHeld[s] = false; key(id, latch[id] || heldKey == id); }
+                e.consume(this);  // (repeats too: a held key must not reach Rack's shortcuts)
+                return;
+            }
+        }
+        Widget::onHoverKey(e);
+    }
+    // The panel takes the hover so it learns when the pointer leaves: key releases after that go
+    // to whatever is under the pointer, so keys still held are released here.
+    void onHover(const event::Hover& e) override {
+        Widget::onHover(e);
+        if (!e.isConsumed()) e.consume(this);
+    }
+    void onEnter(const event::Enter& e) override { hovered = true; }
+    void onLeave(const event::Leave& e) override {
+        hovered = false;
+        for (int s = 0; s < 27; ++s)
+            if (pcHeld[s]) { pcHeld[s] = false; key(s + 14, latch[s + 14] || heldKey == s + 14); }
     }
     void onHoverScroll(const event::HoverScroll& e) override {
         int enc = encoderAt(e.pos);
